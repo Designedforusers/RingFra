@@ -1,0 +1,44 @@
+[project]
+name = "render-voice-agent"
+version = "1.0.0"
+description = "Voice-controlled infrastructure management for Render"
+readme = "README.md"
+requires-python = ">=3.11"
+
+dependencies = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "pipecat-ai[silero,deepgram,cartesia,anthropic,twilio]>=0.0.47",
+    "claude-agent-sdk>=0.1.0",
+    "httpx>=0.25.0",
+    "pydantic-settings>=2.0.0",
+    "loguru>=0.7.0",
+    "python-dotenv>=1.0.0",
+    "twilio>=8.0.0",
+    "websockets>=12.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 88
+select = ["E", "F", "I", "N", "W"]

@@ -1,0 +1,333 @@
+"""
+Code operation tools using Claude Agent SDK.
+
+These tools provide full Claude Code capabilities with native MCP support:
+- Reading/understanding code
+- Writing fixes and features
+- Running tests
+- Git operations
+- Render infrastructure management via MCP
+"""
+
+import os
+
+from claude_agent_sdk import query, ClaudeAgentOptions
+from loguru import logger
+
+from src.config import settings
+
+
+def get_agent_options(
+    allowed_tools: list[str] | None = None,
+    permission_mode: str = "default",
+    include_render_mcp: bool = True,
+) -> ClaudeAgentOptions:
+    """
+    Build Claude Agent SDK options with MCP servers configured.
+
+    Args:
+        allowed_tools: List of allowed tools
+        permission_mode: Permission mode (default, acceptEdits, bypassPermissions)
+        include_render_mcp: Whether to include Render MCP server
+
+    Returns:
+        ClaudeAgentOptions: Configured options for the SDK
+    """
+    mcp_servers = {}
+
+    if include_render_mcp:
+        # Render MCP for infrastructure operations
+        mcp_servers["render"] = {
+            "type": "http",
+            "url": "https://mcp.render.com/mcp",
+            "headers": {
+                "Authorization": f"Bearer {settings.RENDER_API_KEY}"
+            }
+        }
+
+    working_dir = settings.TARGET_REPO_PATH if os.path.exists(settings.TARGET_REPO_PATH) else os.getcwd()
+
+    return ClaudeAgentOptions(
+        working_directory=working_dir,
+        allowed_tools=allowed_tools,
+        permission_mode=permission_mode,
+        mcp_servers=mcp_servers if mcp_servers else None,
+    )
+
+
+async def run_agent(prompt: str, options: ClaudeAgentOptions) -> str:
+    """
+    Run Claude Agent SDK query and collect the final result.
+
+    Args:
+        prompt: The prompt to send
+        options: ClaudeAgentOptions for the agent
+
+    Returns:
+        str: The final text result from the agent
+    """
+    result_text = ""
+
+    try:
+        async for message in query(prompt=prompt, options=options):
+            # Handle dict-style messages
+            if isinstance(message, dict):
+                msg_type = message.get("type")
+                msg_subtype = message.get("subtype")
+
+                if msg_type == "assistant":
+                    content = message.get("content")
+                    if content and isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                result_text = block.get("text", "")
+
+                elif msg_type == "result":
+                    if msg_subtype == "success":
+                        result = message.get("result")
+                        if result:
+                            result_text = str(result)
+                    elif msg_subtype in ("error", "error_during_execution"):
+                        error = message.get("error")
+                        result_text = f"Error: {error}" if error else "An error occurred"
+
+                elif msg_type == "system" and msg_subtype == "init":
+                    mcp_servers = message.get("mcp_servers", [])
+                    for server in mcp_servers:
+                        if server.get("status") != "connected":
+                            logger.warning(f"MCP server {server.get('name')} not connected: {server.get('status')}")
+
+            # Handle object-style messages
+            else:
+                msg_type = getattr(message, "type", None)
+                msg_subtype = getattr(message, "subtype", None)
+
+                if msg_type == "assistant":
+                    content = getattr(message, "content", None)
+                    if content and isinstance(content, list):
+                        for block in content:
+                            if hasattr(block, "type") and block.type == "text":
+                                result_text = getattr(block, "text", "")
+
+                elif msg_type == "result":
+                    if msg_subtype == "success":
+                        result = getattr(message, "result", None)
+                        if result:
+                            result_text = str(result)
+                    elif msg_subtype in ("error", "error_during_execution"):
+                        error = getattr(message, "error", None)
+                        result_text = f"Error: {error}" if error else "An error occurred"
+
+                elif msg_type == "system" and msg_subtype == "init":
+                    mcp_servers = getattr(message, "mcp_servers", [])
+                    for server in mcp_servers:
+                        status = server.get("status") if isinstance(server, dict) else getattr(server, "status", None)
+                        name = server.get("name") if isinstance(server, dict) else getattr(server, "name", None)
+                        if status != "connected":
+                            logger.warning(f"MCP server {name} not connected: {status}")
+
+    except Exception as e:
+        logger.error(f"Agent execution error: {e}")
+        result_text = f"Error during execution: {str(e)}"
+
+    return result_text
+
+
+async def analyze_code(query_text: str) -> str:
+    """
+    Analyze the codebase to understand or find specific patterns.
+
+    Args:
+        query_text: What to analyze (e.g., "authentication flow")
+
+    Returns:
+        str: Analysis summary
+    """
+    logger.info(f"Analyzing code: {query_text}")
+
+    prompt = f"""Analyze this codebase and answer: {query_text}
+
+Be concise - this will be spoken aloud. Focus on:
+1. The key files/functions involved
+2. How they work together
+3. Any issues or concerns you notice
+
+Keep your response under 100 words."""
+
+    options = get_agent_options(
+        allowed_tools=["Read", "Glob", "Grep"],
+        permission_mode="bypassPermissions",
+        include_render_mcp=False,
+    )
+
+    result = await run_agent(prompt, options)
+
+    # Truncate for voice
+    if len(result) > 300:
+        result = result[:297] + "..."
+
+    return result or "I couldn't find relevant information for that query."
+
+
+async def fix_bug(
+    description: str, auto_commit: bool = False, run_tests: bool = True
+) -> str:
+    """
+    Find and fix a bug in the codebase.
+
+    Args:
+        description: Description of the bug
+        auto_commit: Whether to commit the fix automatically
+        run_tests: Whether to run tests after fixing
+
+    Returns:
+        str: Summary of what was fixed
+    """
+    logger.info(f"Fixing bug: {description}")
+
+    test_instruction = "4. Run the test suite to verify the fix" if run_tests else ""
+    commit_instruction = (
+        f'5. Commit with message "fix: {description[:50]}"' if auto_commit else ""
+    )
+
+    prompt = f"""Fix this bug: {description}
+
+Steps:
+1. Search the codebase to find the relevant code
+2. Understand the bug and its cause
+3. Write a fix
+{test_instruction}
+{commit_instruction}
+
+Be concise in your final response - it will be spoken aloud.
+Summarize: what was the bug, what did you change, did tests pass?
+Keep under 75 words."""
+
+    tools = ["Read", "Edit", "Write", "Glob", "Grep"]
+    if run_tests:
+        tools.append("Bash")
+
+    options = get_agent_options(
+        allowed_tools=tools,
+        permission_mode="acceptEdits",
+        include_render_mcp=False,
+    )
+
+    result = await run_agent(prompt, options)
+
+    # Truncate for voice
+    if len(result) > 250:
+        result = result[:247] + "..."
+
+    return result or "I encountered an issue while trying to fix the bug."
+
+
+async def implement_feature(description: str, auto_commit: bool = False) -> str:
+    """
+    Implement a new feature in the codebase.
+
+    Args:
+        description: Description of the feature
+        auto_commit: Whether to commit automatically
+
+    Returns:
+        str: Summary of what was implemented
+    """
+    logger.info(f"Implementing feature: {description}")
+
+    prompt = f"""Implement this feature: {description}
+
+Steps:
+1. Understand the existing code structure
+2. Plan the implementation
+3. Write the code
+4. Add appropriate tests
+5. Run tests to verify
+{"6. Commit the changes" if auto_commit else ""}
+
+Be concise in your final response - it will be spoken aloud.
+Summarize: what files did you create/modify, what does the feature do?
+Keep under 75 words."""
+
+    options = get_agent_options(
+        allowed_tools=["Read", "Edit", "Write", "Glob", "Grep", "Bash"],
+        permission_mode="acceptEdits",
+        include_render_mcp=False,
+    )
+
+    result = await run_agent(prompt, options)
+
+    # Truncate for voice
+    if len(result) > 250:
+        result = result[:247] + "..."
+
+    return result or "I encountered an issue while implementing the feature."
+
+
+async def run_tests(test_path: str | None = None) -> str:
+    """
+    Run the test suite.
+
+    Args:
+        test_path: Optional specific test path
+
+    Returns:
+        str: Test results summary
+    """
+    logger.info(f"Running tests: {test_path or 'all'}")
+
+    test_cmd = f"pytest {test_path}" if test_path else "pytest"
+
+    prompt = f"""Run the tests with: {test_cmd}
+
+Report concisely:
+- How many tests passed/failed
+- If any failed, which ones and why (briefly)
+
+Keep under 50 words."""
+
+    options = get_agent_options(
+        allowed_tools=["Bash", "Read"],
+        permission_mode="bypassPermissions",
+        include_render_mcp=False,
+    )
+
+    result = await run_agent(prompt, options)
+
+    # Truncate for voice
+    if len(result) > 150:
+        result = result[:147] + "..."
+
+    return result or "Tests completed."
+
+
+async def commit_and_push(message: str) -> str:
+    """
+    Commit changes and push to remote.
+
+    Args:
+        message: Commit message
+
+    Returns:
+        str: Result of git operations
+    """
+    logger.info(f"Committing: {message}")
+
+    prompt = f"""Commit and push the current changes:
+
+1. Stage all changes: git add -A
+2. Commit with message: "{message}"
+3. Push to origin
+
+Report briefly: committed X files, pushed to origin.
+Keep under 25 words."""
+
+    options = get_agent_options(
+        allowed_tools=["Bash"],
+        permission_mode="bypassPermissions",
+        include_render_mcp=False,
+    )
+
+    result = await run_agent(prompt, options)
+
+    return result or "Changes committed and pushed."

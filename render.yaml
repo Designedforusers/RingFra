@@ -1,0 +1,42 @@
+services:
+  - type: web
+    name: render-voice-agent
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+
+    envVars:
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_PHONE_NUMBER
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: DEEPGRAM_API_KEY
+        sync: false
+      - key: CARTESIA_API_KEY
+        sync: false
+      - key: RENDER_API_KEY
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_REPO_URL
+        sync: false
+      - key: APP_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: PORT
+        value: "8765"
+      - key: TARGET_REPO_PATH
+        value: /app/target-repo
+
+    healthCheckPath: /health
+
+    scaling:
+      minInstances: 1
+      maxInstances: 3
+      targetMemoryPercent: 80
+      targetCPUPercent: 80
