@@ -506,3 +506,167 @@ async def check_workflow_status(run_id: int) -> str:
             return f"{name}: {state} (in progress)"
     else:
         return f"Couldn't get status for run {run_id}"
+
+
+def parse_ship_intent(user_message: str) -> dict:
+    """
+    Parse natural language shipping instructions into strategies.
+    
+    Examples:
+        "ship it" → CI tests, Claude review
+        "just push it" → no tests, no review
+        "ship with tests" → local tests, Claude review
+        "ship it, run tests first" → local tests, Claude review
+        "deploy without review" → CI tests, no review
+        "ship with opus review" → CI tests, Opus review
+        "quick ship" → no tests, no review, auto-merge
+        
+    Returns:
+        Dict with test_strategy, review_strategy, auto_merge, model, effort
+    """
+    from src.repos.manager import TestStrategy, ReviewStrategy
+    
+    msg = user_message.lower()
+    
+    # Defaults
+    result = {
+        "test_strategy": TestStrategy.CI,
+        "review_strategy": ReviewStrategy.CLAUDE,
+        "auto_merge": False,
+        "review_model": "claude-sonnet-4-20250514",
+        "review_effort": "medium",
+    }
+    
+    # Test strategy parsing
+    if any(phrase in msg for phrase in ["no test", "skip test", "without test"]):
+        result["test_strategy"] = TestStrategy.NONE
+    elif any(phrase in msg for phrase in ["run test", "test first", "with test", "local test"]):
+        result["test_strategy"] = TestStrategy.LOCAL
+    elif "both test" in msg or "full test" in msg:
+        result["test_strategy"] = TestStrategy.BOTH
+    # else: default to CI
+    
+    # Review strategy parsing
+    if any(phrase in msg for phrase in ["no review", "skip review", "without review", "just push", "just ship"]):
+        result["review_strategy"] = ReviewStrategy.NONE
+    elif any(phrase in msg for phrase in ["human review", "manual review", "team review"]):
+        result["review_strategy"] = ReviewStrategy.HUMAN
+    # else: default to Claude
+    
+    # Model parsing
+    if "opus" in msg:
+        result["review_model"] = "claude-opus-4-20250514"
+    
+    # Effort parsing
+    if any(phrase in msg for phrase in ["thorough", "careful", "deep", "high effort"]):
+        result["review_effort"] = "high"
+    elif any(phrase in msg for phrase in ["quick", "fast", "brief", "low effort"]):
+        result["review_effort"] = "low"
+    
+    # Auto-merge parsing
+    if any(phrase in msg for phrase in ["auto merge", "auto-merge", "merge when ready", "merge if pass"]):
+        result["auto_merge"] = True
+    elif "quick ship" in msg or "yolo" in msg:
+        result["test_strategy"] = TestStrategy.NONE
+        result["review_strategy"] = ReviewStrategy.NONE
+        result["auto_merge"] = True
+    
+    return result
+
+
+async def ship_it(
+    title: str,
+    description: str = "",
+    user_instructions: str = "",
+    worktree_path: str | None = None,
+    branch_name: str | None = None,
+    repo_url: str | None = None,
+) -> str:
+    """
+    Ship changes based on natural language instructions.
+    
+    This is the main "ship it" command for the voice agent.
+    Parses user intent and calls ship_changes with appropriate strategies.
+    
+    Args:
+        title: PR title
+        description: PR description
+        user_instructions: Natural language like "ship it with tests"
+        worktree_path: Path to worktree (from current task)
+        branch_name: Branch name (from current task)
+        repo_url: Repo URL (from current task)
+        
+    Returns:
+        Status message for voice response
+    """
+    from pathlib import Path
+    from src.repos.manager import ship_changes
+    
+    user_ctx = get_current_user_context()
+    if not user_ctx:
+        return "No user context - can't ship changes"
+    
+    # Get credentials
+    creds = user_ctx.get("credentials", {}).get("github", {})
+    token = creds.get("access_token")
+    if not token:
+        return "No GitHub token - please reconnect GitHub"
+    
+    # Get task context if not provided
+    if not worktree_path or not branch_name or not repo_url:
+        # Try to get from current task context
+        task_ctx = user_ctx.get("current_task", {})
+        worktree_path = worktree_path or task_ctx.get("worktree_path")
+        branch_name = branch_name or task_ctx.get("branch_name")
+        repo_url = repo_url or task_ctx.get("repo_url")
+    
+    if not all([worktree_path, branch_name, repo_url]):
+        return "No active task to ship. Start a task first with 'fix the bug' or 'add a feature'."
+    
+    # Parse user instructions
+    intent = parse_ship_intent(user_instructions or "ship it")
+    
+    # Build response preview
+    strategy_desc = []
+    if intent["test_strategy"].value == "none":
+        strategy_desc.append("skipping tests")
+    elif intent["test_strategy"].value == "local":
+        strategy_desc.append("running local tests")
+    elif intent["test_strategy"].value == "ci":
+        strategy_desc.append("CI will run tests")
+    else:
+        strategy_desc.append("running local + CI tests")
+    
+    if intent["review_strategy"].value == "none":
+        strategy_desc.append("no review")
+    elif intent["review_strategy"].value == "claude":
+        model_name = "Opus" if "opus" in intent["review_model"] else "Sonnet"
+        strategy_desc.append(f"Claude {model_name} review")
+    else:
+        strategy_desc.append("waiting for human review")
+    
+    if intent["auto_merge"]:
+        strategy_desc.append("auto-merge enabled")
+    
+    logger.info(f"Shipping with: {', '.join(strategy_desc)}")
+    
+    # Ship it
+    result = await ship_changes(
+        worktree_path=Path(worktree_path),
+        repo_url=repo_url,
+        branch_name=branch_name,
+        github_token=token,
+        title=title,
+        description=description,
+        test_strategy=intent["test_strategy"],
+        review_strategy=intent["review_strategy"],
+        review_model=intent["review_model"],
+        review_effort=intent["review_effort"],
+        auto_merge=intent["auto_merge"],
+    )
+    
+    if result.success:
+        pr_url = result.data.get("pr_url", "") if result.data else ""
+        return f"{result.message}. {pr_url}"
+    else:
+        return f"Failed to ship: {result.message}"
