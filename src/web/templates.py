@@ -238,14 +238,34 @@ def render_connect_github_page(phone: str, user_exists: bool = False) -> str:
     return _base_html("Connect GitHub", content)
 
 
-def render_connect_render_page(phone: str, github_username: str | None = None) -> str:
-    """Render the Render API key input page."""
-    github_msg = f"Connected as <strong>{github_username}</strong>" if github_username else "GitHub connected"
+def render_select_repos_page(phone: str, github_username: str | None = None, repos: list = None) -> str:
+    """Render the repository selection page."""
+    repos = repos or []
+    
+    # Build repo checkboxes
+    repo_items = []
+    for repo in repos[:20]:  # Limit to 20 most recent
+        name = repo.get("full_name", repo.get("name", "Unknown"))
+        url = repo.get("html_url", "")
+        private = "🔒" if repo.get("private") else "🌐"
+        updated = repo.get("updated_at", "")[:10] if repo.get("updated_at") else ""
+        
+        repo_items.append(f"""
+            <label class="repo-item">
+                <input type="checkbox" name="repos" value="{url}" checked>
+                <span class="repo-info">
+                    <span class="repo-name">{private} {name}</span>
+                    <span class="repo-meta">Updated {updated}</span>
+                </span>
+            </label>
+        """)
+    
+    repos_html = "\n".join(repo_items) if repo_items else "<p>No repositories found</p>"
     
     content = f"""
-        <div class="logo">🚀</div>
-        <h1>Connect Render</h1>
-        <p class="subtitle">Almost done! Add your Render API key.</p>
+        <div class="logo">📁</div>
+        <h1>Select Repositories</h1>
+        <p class="subtitle">Choose which repos the voice agent can access</p>
         
         <div class="step done">
             <div class="step-number"><span>1</span></div>
@@ -254,29 +274,141 @@ def render_connect_render_page(phone: str, github_username: str | None = None) -
         
         <div class="step done">
             <div class="step-number"><span>2</span></div>
-            <div>{github_msg}</div>
+            <div>GitHub connected as <strong>{github_username}</strong></div>
         </div>
         
         <div class="step">
             <div class="step-number"><span>3</span></div>
+            <div>Select repositories</div>
+        </div>
+        
+        <div class="step">
+            <div class="step-number"><span>4</span></div>
             <div>Add Render API key</div>
+        </div>
+        
+        <br>
+        <form action="/signup/repos/save" method="POST">
+            <input type="hidden" name="phone" value="{phone}">
+            <div class="repo-list">
+                {repos_html}
+            </div>
+            <br>
+            <button type="submit">Continue</button>
+            <p class="help-text" style="text-align: center; margin-top: 10px;">
+                You can change this later
+            </p>
+        </form>
+        
+        <style>
+            .repo-list {{
+                max-height: 300px;
+                overflow-y: auto;
+                margin-bottom: 15px;
+            }}
+            .repo-item {{
+                display: flex;
+                align-items: center;
+                padding: 12px;
+                background: rgba(255, 255, 255, 0.05);
+                border-radius: 8px;
+                margin-bottom: 8px;
+                cursor: pointer;
+                transition: background 0.2s;
+            }}
+            .repo-item:hover {{
+                background: rgba(255, 255, 255, 0.1);
+            }}
+            .repo-item input {{
+                margin-right: 12px;
+                width: 18px;
+                height: 18px;
+            }}
+            .repo-info {{
+                display: flex;
+                flex-direction: column;
+            }}
+            .repo-name {{
+                font-weight: 500;
+            }}
+            .repo-meta {{
+                font-size: 12px;
+                color: rgba(255, 255, 255, 0.5);
+            }}
+        </style>
+    """
+    
+    return _base_html("Select Repositories", content)
+
+
+def render_connect_render_page(phone: str, github_username: str | None = None, repo_count: int = 0) -> str:
+    """Render the Render API key input page."""
+    repos_msg = f"{repo_count} repos selected" if repo_count else "Repos selected"
+    
+    content = f"""
+        <div class="logo">🚀</div>
+        <h1>Connect Render</h1>
+        <p class="subtitle">Last step! Add your Render API key.</p>
+        
+        <div class="step done">
+            <div class="step-number"><span>1</span></div>
+            <div>Phone verified</div>
+        </div>
+        
+        <div class="step done">
+            <div class="step-number"><span>2</span></div>
+            <div>GitHub connected</div>
+        </div>
+        
+        <div class="step done">
+            <div class="step-number"><span>3</span></div>
+            <div>{repos_msg}</div>
+        </div>
+        
+        <div class="step">
+            <div class="step-number"><span>4</span></div>
+            <div>Add Render API key</div>
+        </div>
+        
+        <br>
+        
+        <div class="info-box">
+            <strong>How to get your API key:</strong>
+            <ol style="margin: 10px 0 0 20px; color: rgba(255,255,255,0.8);">
+                <li>Go to <a href="https://dashboard.render.com/u/settings#api-keys" target="_blank">Render Dashboard</a></li>
+                <li>Click "Create API Key"</li>
+                <li>Give it a name (e.g., "Voice Agent")</li>
+                <li>Copy and paste it below</li>
+            </ol>
         </div>
         
         <br>
         <form action="/signup/render/save" method="POST">
             <input type="hidden" name="phone" value="{phone}">
             <input 
-                type="password" 
+                type="text" 
                 name="render_api_key" 
-                placeholder="rnd_xxxxxxxxxxxxxxxx"
+                placeholder="rnd_xxxxxxxxxxxxxxxxxxxxxxxx"
                 required
+                autocomplete="off"
+                spellcheck="false"
             >
-            <p class="help-text">
-                Get your API key from <a href="https://dashboard.render.com/u/settings/api-keys" target="_blank">Render Dashboard → Account Settings → API Keys</a>
-            </p>
             <br>
             <button type="submit">Complete Setup</button>
         </form>
+        
+        <style>
+            .info-box {{
+                background: rgba(0, 212, 255, 0.1);
+                border: 1px solid rgba(0, 212, 255, 0.3);
+                border-radius: 10px;
+                padding: 15px;
+                font-size: 14px;
+            }}
+            .info-box a {{
+                color: #00d4ff;
+            }}
+        </style>
     """
     
     return _base_html("Connect Render", content)

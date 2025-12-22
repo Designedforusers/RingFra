@@ -15,6 +15,7 @@ from src.db.users import get_user_by_phone, create_user, save_user_credentials, 
 from src.web.templates import (
     render_signup_page,
     render_connect_github_page,
+    render_select_repos_page,
     render_connect_render_page,
     render_success_page,
     render_error_page,
@@ -148,6 +149,22 @@ async def github_oauth_callback(code: str | None = None, state: str | None = Non
         logger.error(f"Failed to get GitHub user info: {e}")
         github_user = {}
     
+    # Get user's repos
+    repos = []
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                "https://api.github.com/user/repos?per_page=100&sort=updated",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Accept": "application/vnd.github+json",
+                },
+            )
+            response.raise_for_status()
+            repos = response.json()
+    except Exception as e:
+        logger.error(f"Failed to get user repos: {e}")
+    
     # Save credentials
     user = await get_or_create_user(phone)
     await save_user_credentials(
@@ -157,10 +174,56 @@ async def github_oauth_callback(code: str | None = None, state: str | None = Non
         refresh_token=token_data.get("refresh_token"),
     )
     
+    # Store token temporarily for repo selection
+    _oauth_states[f"repos_{phone}"] = {"access_token": access_token, "user_id": user["id"]}
+    
     logger.info(f"Saved GitHub credentials for user {user['id']} (GitHub: {github_user.get('login', 'unknown')})")
     
+    # Show repo selection page
+    return render_select_repos_page(
+        phone=phone,
+        github_username=github_user.get("login"),
+        repos=repos,
+    )
+
+
+@router.post("/repos/save", response_class=HTMLResponse)
+async def save_selected_repos(request: Request):
+    """
+    Save selected repositories.
+    """
+    form = await request.form()
+    phone = form.get("phone", "").strip()
+    selected_repos = form.getlist("repos")
+    
+    if not phone:
+        return render_error_page("Missing phone number")
+    
+    # Get stored data
+    state_data = _oauth_states.get(f"repos_{phone}")
+    if not state_data:
+        return render_error_page("Session expired. Please start over.")
+    
+    user_id = state_data["user_id"]
+    
+    # Save selected repos
+    from src.db.users import add_user_repo
+    for repo_url in selected_repos:
+        try:
+            await add_user_repo(
+                user_id=user_id,
+                github_url=repo_url,
+            )
+        except Exception as e:
+            logger.error(f"Failed to save repo {repo_url}: {e}")
+    
+    logger.info(f"Saved {len(selected_repos)} repos for user {user_id}")
+    
+    # Clean up
+    _oauth_states.pop(f"repos_{phone}", None)
+    
     # Continue to Render setup
-    return render_connect_render_page(phone=phone, github_username=github_user.get("login"))
+    return render_connect_render_page(phone=phone, repo_count=len(selected_repos))
 
 
 @router.post("/render/save", response_class=HTMLResponse)
