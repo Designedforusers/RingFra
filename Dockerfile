@@ -4,6 +4,7 @@ FROM python:3.11-slim
 RUN apt-get update && apt-get install -y \
     git \
     curl \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js (required for Claude Code CLI)
