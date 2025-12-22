@@ -34,6 +34,13 @@ services:
         value: /app/target-repo
       - key: VOICE_MODEL
         value: claude-sonnet-4-5-20250929
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: render-voice-agent-redis
+          property: connectionString
+      - key: OWNER_PHONE
+        sync: false
 
     healthCheckPath: /health
 
@@ -42,3 +49,41 @@ services:
       maxInstances: 3
       targetMemoryPercent: 80
       targetCPUPercent: 80
+
+  # Background worker for proactive features
+  - type: worker
+    name: render-voice-agent-worker
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+
+    envVars:
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_PHONE_NUMBER
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: RENDER_API_KEY
+        sync: false
+      - key: APP_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: render-voice-agent-redis
+          property: connectionString
+      - key: OWNER_PHONE
+        sync: false
+
+    dockerCommand: python -m arq src.tasks.worker.WorkerSettings
+
+databases:
+  - name: render-voice-agent-redis
+    type: redis
+    plan: free
+    maxmemoryPolicy: allkeys-lru

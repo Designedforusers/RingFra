@@ -2,6 +2,9 @@
 System prompts and tool configurations for the voice agent.
 """
 
+import json
+from typing import Any
+
 SYSTEM_PROMPT = """You are an AI infrastructure assistant for applications deployed on Render. You're speaking with a developer who wants to manage their production systems via voice commands.
 
 ## Your Capabilities
@@ -54,7 +57,61 @@ You: "I'll look at the authentication code and find the issue. Give me a moment.
 
 User: "Scale up the API"
 You: "I'll scale the FastAPI backend from 1 to 2 instances. This will take about 30 seconds. Done - you now have 2 instances running."
+
+### Proactive Tools
+- **schedule_callback**: Run a task in the background and call back when done
+- **set_reminder**: Set a reminder to call back later
+- **enable_monitoring**: Watch a service and call if issues detected
+
+## Proactive Patterns
+
+When the user says things like:
+- "Fix this and call me back" → Use schedule_callback with the task
+- "Remind me in 2 hours to check the deploy" → Use set_reminder
+- "Watch the API and call me if it goes down" → Use enable_monitoring
 """
+
+
+# Callback-specific system prompt for outbound calls
+CALLBACK_SYSTEM_PROMPT = """You are an AI infrastructure assistant calling the user back with an update.
+
+## Context
+{context}
+
+## Your Task
+
+1. **Start by delivering the update** - Tell them what happened
+2. **Be ready for follow-up questions** - They may want more details or to take action
+3. **You still have full access to tools** - Can check logs, scale, deploy, etc.
+
+## Response Style
+
+- Be conversational: "Hi, I'm calling back about..."
+- Be concise: Get to the point quickly
+- Be helpful: Offer next steps if appropriate
+
+## Example Opening
+
+For a completed task: "Hi, I'm calling back about the bug fix you asked me to work on. Good news - I found and fixed the issue. The tests are passing. Would you like me to deploy it?"
+
+For an alert: "Hi, I detected an issue with your API service - it's showing high CPU usage at 92%. Would you like me to scale it up or investigate the logs?"
+
+For a reminder: "Hi, you asked me to remind you to check on the deployment. It's been running for 2 hours now. Want me to pull up the logs?"
+"""
+
+
+def get_callback_prompt(context: dict[str, Any]) -> str:
+    """
+    Get the system prompt for a callback call.
+
+    Args:
+        context: The callback context (task result, alert, reminder, etc.)
+
+    Returns:
+        Formatted system prompt
+    """
+    context_str = json.dumps(context, indent=2)
+    return CALLBACK_SYSTEM_PROMPT.format(context=context_str)
 
 
 def get_tools_config() -> list:
@@ -283,6 +340,76 @@ def get_tools_config() -> list:
                 "type": "object",
                 "properties": {},
                 "required": [],
+            },
+        },
+        # === Proactive Tools ===
+        {
+            "name": "schedule_callback",
+            "description": "Schedule a background task and call the user back when complete. Use when user says 'do X and call me back' or 'work on this and let me know when done'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "task_type": {
+                        "type": "string",
+                        "description": "Type of task: fix_bug, implement_feature, run_tests, analyze_code, trigger_deploy, scale_service",
+                    },
+                    "params": {
+                        "type": "object",
+                        "description": "Parameters for the task (e.g., {description: 'fix login bug'} for fix_bug)",
+                    },
+                },
+                "required": ["task_type"],
+            },
+        },
+        {
+            "name": "set_reminder",
+            "description": "Set a reminder to call the user back later. Use when user says 'remind me in X hours/minutes'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "What to remind the user about",
+                    },
+                    "delay_minutes": {
+                        "type": "integer",
+                        "description": "Minutes to wait before calling back",
+                    },
+                },
+                "required": ["message", "delay_minutes"],
+            },
+        },
+        {
+            "name": "enable_monitoring",
+            "description": "Enable proactive monitoring for a service. Will call the user if issues are detected. Use when user says 'watch X and alert me'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "service_name": {
+                        "type": "string",
+                        "description": "Name of the service to monitor",
+                    },
+                    "alert_threshold": {
+                        "type": "string",
+                        "description": "When to alert: 'critical' (only critical issues), 'warning' (warnings and critical), 'all' (any issue)",
+                        "default": "critical",
+                    },
+                },
+                "required": ["service_name"],
+            },
+        },
+        {
+            "name": "disable_monitoring",
+            "description": "Stop monitoring a service.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "service_name": {
+                        "type": "string",
+                        "description": "Name of the service to stop monitoring",
+                    },
+                },
+                "required": ["service_name"],
             },
         },
     ]

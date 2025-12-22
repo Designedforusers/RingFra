@@ -19,6 +19,9 @@ dependencies = [
     # Observability
     "sentry-sdk[fastapi]>=1.39.0",
     "langfuse>=2.0.0",
+    # Background tasks
+    "arq>=0.26",
+    "redis>=5.0",
 ]
 
 [project.optional-dependencies]

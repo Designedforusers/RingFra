@@ -109,9 +109,26 @@ async def handle_media_stream(websocket: WebSocket):
             set_session_phone(stream_sid, caller_phone)
             logger.info(f"MEDIA STREAM: Stored caller phone {caller_phone} for session")
 
+        # Check for callback context (outbound calls)
+        call_type = custom_params.get("callType", "inbound")
+        callback_context = None
+        if custom_params.get("callbackContext"):
+            import json
+            try:
+                callback_context = json.loads(custom_params.get("callbackContext", "{}"))
+                logger.info(f"MEDIA STREAM: Callback context: {callback_context}")
+            except json.JSONDecodeError:
+                logger.warning("MEDIA STREAM: Failed to parse callback context")
+
         # Run the voice pipeline (blocking until call ends)
-        logger.info("MEDIA STREAM: Running Pipecat voice pipeline...")
-        await run_pipeline(websocket, stream_sid, call_sid)
+        logger.info(f"MEDIA STREAM: Running Pipecat voice pipeline (type={call_type})...")
+        await run_pipeline(
+            websocket,
+            stream_sid,
+            call_sid,
+            call_type=call_type,
+            callback_context=callback_context,
+        )
 
         call_duration = time.time() - call_start
         logger.info(f"MEDIA STREAM: Call ended normally after {call_duration:.1f}s")

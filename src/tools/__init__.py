@@ -24,6 +24,12 @@ from src.tools.render_tools import (
     update_env_var,
 )
 from src.tools.utility_tools import get_status
+from src.tools.proactive_tools import (
+    schedule_callback,
+    set_reminder,
+    enable_monitoring,
+    disable_monitoring,
+)
 
 # Tool registry
 TOOLS = {
@@ -43,6 +49,11 @@ TOOLS = {
     "commit_and_push": commit_and_push,
     # Utility
     "get_status": get_status,
+    # Proactive
+    "schedule_callback": schedule_callback,
+    "set_reminder": set_reminder,
+    "enable_monitoring": enable_monitoring,
+    "disable_monitoring": disable_monitoring,
 }
 
 

@@ -43,7 +43,7 @@ from pipecat.observers.loggers.llm_log_observer import LLMLogObserver
 
 from src.config import settings
 from src.tools import execute_tool
-from src.voice.prompts import SYSTEM_PROMPT, get_tools_config
+from src.voice.prompts import SYSTEM_PROMPT, get_tools_config, get_callback_prompt
 
 # Initialize Sentry if configured
 if settings.SENTRY_DSN:
@@ -80,6 +80,8 @@ async def run_pipeline(
     websocket: WebSocket,
     stream_sid: str,
     call_sid: str,
+    call_type: str = "inbound",
+    callback_context: dict | None = None,
 ) -> None:
     """
     Run the Pipecat voice pipeline.
@@ -90,8 +92,11 @@ async def run_pipeline(
         websocket: The WebSocket connection from Twilio
         stream_sid: Twilio stream SID
         call_sid: Twilio call SID
+        call_type: "inbound" or "outbound_*" for callback calls
+        callback_context: Context for outbound callback calls
     """
-    logger.info(f"Starting pipeline for stream_sid={stream_sid}, call_sid={call_sid}")
+    is_callback = call_type.startswith("outbound_")
+    logger.info(f"Starting pipeline for stream_sid={stream_sid}, call_sid={call_sid}, type={call_type}")
 
     # === Serializer with Twilio credentials for auto hang-up ===
     serializer = TwilioFrameSerializer(
@@ -149,9 +154,16 @@ async def run_pipeline(
     
     tools = ToolsSchema(standard_tools=function_schemas)
 
+    # Use callback prompt for outbound calls, otherwise standard prompt
+    if is_callback and callback_context:
+        system_prompt = get_callback_prompt(callback_context)
+        logger.info(f"Using callback prompt with context: {callback_context.get('event_type', 'unknown')}")
+    else:
+        system_prompt = SYSTEM_PROMPT
+
     # Start with system prompt only - greeting added in on_client_connected
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt},
     ]
     context = LLMContext(messages, tools)
     context_aggregator = LLMContextAggregatorPair(context)
@@ -165,11 +177,13 @@ async def run_pipeline(
         logger.info(f"Tool call: {function_name} with args: {arguments}")
 
         try:
-            # Inject caller phone for deploy-related tools
-            if function_name == "trigger_deploy" and stream_sid:
-                caller_phone = get_session_phone(stream_sid)
-                if caller_phone:
-                    arguments["caller_phone"] = caller_phone
+            # Inject caller phone for tools that need it
+            caller_phone = get_session_phone(stream_sid) if stream_sid else None
+
+            # Tools that need caller phone for callbacks/notifications
+            phone_tools = ["trigger_deploy", "schedule_callback", "set_reminder", "enable_monitoring"]
+            if function_name in phone_tools and caller_phone:
+                arguments["caller_phone"] = caller_phone
 
             result = await execute_tool(function_name, arguments)
             await params.result_callback(result)
@@ -221,10 +235,18 @@ async def run_pipeline(
     async def on_client_connected(transport, client):
         logger.info("Client connected")
         # Add greeting prompt and kick off conversation
-        messages.append({
-            "role": "system",
-            "content": "Greet the user briefly and ask how you can help with their Render infrastructure today."
-        })
+        if is_callback:
+            # For callbacks, prompt to deliver the update
+            messages.append({
+                "role": "system",
+                "content": "Deliver the update from the context. Start with 'Hi, I'm calling back about...' and be concise."
+            })
+        else:
+            # For inbound calls, greet normally
+            messages.append({
+                "role": "system",
+                "content": "Greet the user briefly and ask how you can help with their Render infrastructure today."
+            })
         await task.queue_frames([LLMRunFrame()])
 
     @transport.event_handler("on_client_disconnected")

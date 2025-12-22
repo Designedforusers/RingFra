@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     LANGFUSE_SECRET_KEY: str | None = None
     LANGFUSE_HOST: str = "https://cloud.langfuse.com"
 
+    # Background Tasks (Redis)
+    REDIS_URL: str | None = None  # Required for proactive features
+    OWNER_PHONE: str | None = None  # Phone to call for alerts/monitoring
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
