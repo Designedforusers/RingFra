@@ -5,12 +5,23 @@ Manages the connection between Twilio phone calls
 and the Pipecat voice pipeline.
 """
 
+import time
+import traceback
+
 from fastapi import Request, WebSocket
 from fastapi.responses import Response
 from loguru import logger
 from twilio.twiml.voice_response import Connect, Stream, VoiceResponse
 
+from src.config import settings
 from src.voice.pipeline import create_voice_pipeline
+
+# Import Sentry for error capture if available
+try:
+    import sentry_sdk
+    HAS_SENTRY = bool(settings.SENTRY_DSN)
+except ImportError:
+    HAS_SENTRY = False
 
 
 async def handle_incoming_call(request: Request) -> Response:
@@ -65,20 +76,34 @@ async def handle_media_stream(websocket: WebSocket):
     of the call. Pipecat's FastAPIWebsocketTransport handles
     the WebSocket lifecycle internally.
     """
-    logger.info("Creating Pipecat voice pipeline for Twilio stream")
+    call_start = time.time()
+    logger.info("=" * 60)
+    logger.info("MEDIA STREAM: Starting new Twilio WebSocket connection")
+    logger.info("=" * 60)
 
     try:
         # Create and run the voice pipeline
-        # Pipecat handles WebSocket acceptance and communication
+        logger.info("MEDIA STREAM: Creating Pipecat voice pipeline...")
         pipeline_task = await create_voice_pipeline(websocket)
+        logger.info("MEDIA STREAM: Pipeline created, running...")
 
         # Run the pipeline until the call ends
         await pipeline_task
 
-        logger.info("Call ended normally")
+        call_duration = time.time() - call_start
+        logger.info(f"MEDIA STREAM: Call ended normally after {call_duration:.1f}s")
 
     except Exception as e:
-        logger.error(f"Error in media stream: {e}")
+        call_duration = time.time() - call_start
+        logger.error(f"MEDIA STREAM ERROR after {call_duration:.1f}s: {type(e).__name__}: {e}")
+        logger.error(f"MEDIA STREAM TRACEBACK:\n{traceback.format_exc()}")
+
+        # Report to Sentry if available
+        if HAS_SENTRY:
+            sentry_sdk.capture_exception(e)
+
         raise
     finally:
-        logger.info("Pipeline terminated")
+        call_duration = time.time() - call_start
+        logger.info(f"MEDIA STREAM: Pipeline terminated (total: {call_duration:.1f}s)")
+        logger.info("=" * 60)

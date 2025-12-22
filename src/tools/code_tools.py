@@ -48,7 +48,7 @@ def get_agent_options(
     working_dir = settings.TARGET_REPO_PATH if os.path.exists(settings.TARGET_REPO_PATH) else os.getcwd()
 
     return ClaudeAgentOptions(
-        working_directory=working_dir,
+        cwd=working_dir,
         allowed_tools=allowed_tools,
         permission_mode=permission_mode,
         mcp_servers=mcp_servers if mcp_servers else None,

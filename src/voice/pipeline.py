@@ -9,9 +9,11 @@ Orchestrates:
 - Tool execution
 
 Uses Pipecat's built-in Twilio transport for proper audio handling.
+Includes comprehensive observability via Pipecat observers.
 """
 
 import asyncio
+import os
 
 from fastapi import WebSocket
 from loguru import logger
@@ -31,9 +33,25 @@ from pipecat.transports.websocket.fastapi import (
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.serializers.twilio import TwilioFrameSerializer
 
+# Pipecat Observers for comprehensive logging
+from pipecat.observers.loggers.metrics_log_observer import MetricsLogObserver
+from pipecat.observers.loggers.transcription_log_observer import TranscriptionLogObserver
+from pipecat.observers.loggers.llm_log_observer import LLMLogObserver
+
 from src.config import settings
 from src.tools import execute_tool
 from src.voice.prompts import SYSTEM_PROMPT, get_tools_config
+
+# Initialize Sentry if configured
+if settings.SENTRY_DSN:
+    import sentry_sdk
+    sentry_sdk.init(
+        dsn=settings.SENTRY_DSN,
+        traces_sample_rate=1.0,
+        profiles_sample_rate=1.0,
+        environment=settings.APP_ENV,
+    )
+    logger.info("Sentry initialized for error tracking")
 
 
 # Store caller phone per session for notifications
@@ -158,44 +176,57 @@ async def create_voice_pipeline(websocket: WebSocket) -> asyncio.Task:
         ]
     )
 
+    # === Observers for Full Observability ===
+    observers = [
+        MetricsLogObserver(),  # TTFB, processing times, token usage
+        TranscriptionLogObserver(),  # What user said (STT output)
+        LLMLogObserver(),  # LLM requests and responses
+    ]
+    logger.info("Pipeline observers initialized: metrics, transcription, LLM")
+
     # === Task Runner ===
     task = PipelineTask(
         pipeline,
         params=PipelineParams(
             allow_interruptions=True,
             enable_metrics=True,
+            observers=observers,
         ),
     )
 
     # === Event Handlers ===
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
-        logger.info("Twilio client connected")
+        logger.info("PIPELINE EVENT: Twilio client connected")
+        logger.info(f"PIPELINE EVENT: Client info: {client}")
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
-        logger.info("Twilio client disconnected")
+        logger.info("PIPELINE EVENT: Twilio client disconnected")
         if stream_sid:
             clear_session_phone(stream_sid)
 
     @transport.event_handler("on_call_state_updated")
     async def on_call_state_updated(transport, state):
         nonlocal stream_sid
+        logger.info(f"PIPELINE EVENT: Call state updated: {state}")
         if hasattr(state, "stream_sid"):
             stream_sid = state.stream_sid
-            logger.info(f"Stream SID: {stream_sid}")
+            logger.info(f"PIPELINE EVENT: Stream SID set: {stream_sid}")
 
         # Extract caller phone from custom parameters if available
         if hasattr(state, "custom_parameters"):
             caller_phone = state.custom_parameters.get("callerPhone")
             if caller_phone and stream_sid:
                 set_session_phone(stream_sid, caller_phone)
-                logger.info(f"Caller phone captured: {caller_phone}")
+                logger.info(f"PIPELINE EVENT: Caller phone captured: {caller_phone}")
 
     # === Welcome Message ===
     # Queue initial greeting after pipeline starts
     async def send_welcome():
+        logger.info("WELCOME: Waiting 0.5s before sending greeting...")
         await asyncio.sleep(0.5)  # Brief delay for connection
+        logger.info("WELCOME: Queueing initial greeting message to LLM")
         initial_message = LLMMessagesFrame(
             [
                 {
@@ -205,21 +236,30 @@ async def create_voice_pipeline(websocket: WebSocket) -> asyncio.Task:
             ]
         )
         await task.queue_frame(initial_message)
+        logger.info("WELCOME: Initial greeting queued successfully")
 
     # === Run Pipeline ===
     runner = PipelineRunner()
 
     async def run_pipeline():
+        logger.info("RUNNER: Starting pipeline runner...")
         # Start welcome message task
         welcome_task = asyncio.create_task(send_welcome())
 
         try:
+            logger.info("RUNNER: Calling runner.run(task)...")
             await runner.run(task)
+            logger.info("RUNNER: runner.run(task) completed normally")
+        except Exception as e:
+            logger.error(f"RUNNER ERROR: {type(e).__name__}: {e}")
+            raise
         finally:
             welcome_task.cancel()
             if stream_sid:
                 clear_session_phone(stream_sid)
+            logger.info("RUNNER: Pipeline runner cleanup complete")
 
+    logger.info("PIPELINE: Creating asyncio task for run_pipeline")
     pipeline_task = asyncio.create_task(run_pipeline())
 
     return pipeline_task

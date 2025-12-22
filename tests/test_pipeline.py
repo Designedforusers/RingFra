@@ -83,9 +83,9 @@ class TestHandlers:
         assert response.media_type == "application/xml"
         content = response.body.decode()
         assert "<Response>" in content
-        assert "<Say>" in content
+        assert "<Say" in content
         assert "<Connect>" in content
-        assert "<Stream>" in content
+        assert "<Stream" in content
         # Check caller phone is passed as parameter
         assert "callerPhone" in content
         assert "+14155551234" in content

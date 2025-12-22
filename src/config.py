@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     STT_MODEL: str = "nova-3"
     TTS_VOICE: str = "228fca29-3a0a-435c-8728-5cb483251068"  # Cartesia "Kiefer" - stable male voice for agents
 
+    # Observability
+    SENTRY_DSN: str | None = None  # Optional: Sentry error tracking
+    LANGFUSE_PUBLIC_KEY: str | None = None  # Optional: LLM observability
+    LANGFUSE_SECRET_KEY: str | None = None
+    LANGFUSE_HOST: str = "https://cloud.langfuse.com"
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
