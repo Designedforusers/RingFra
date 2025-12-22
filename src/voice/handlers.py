@@ -75,8 +75,9 @@ async def handle_incoming_call(request: Request) -> Response:
     Handle incoming Twilio call webhook.
 
     Returns TwiML that:
-    1. Says a brief greeting
-    2. Connects to WebSocket for streaming with caller info
+    1. Checks if user exists
+    2. If new user: sends SMS signup link and plays message
+    3. If existing user: connects to voice pipeline
     """
     # Get form data from Twilio
     form_data = await request.form()
@@ -92,7 +93,33 @@ async def handle_incoming_call(request: Request) -> Response:
 
     response = VoiceResponse()
 
-    # Brief greeting while connecting
+    # Check if user exists (for multi-tenant mode)
+    user_exists = True
+    if settings.DATABASE_URL and caller_phone:
+        try:
+            from src.db.users import get_user_by_phone
+            user = await get_user_by_phone(caller_phone)
+            user_exists = user is not None
+        except Exception as e:
+            logger.error(f"Failed to check user: {e}")
+            user_exists = True  # Fail open
+    
+    if not user_exists:
+        # New user - send SMS with signup link and play message
+        logger.info(f"Unknown caller {caller_phone} - sending signup SMS")
+        await _send_signup_sms(caller_phone)
+        
+        response.say(
+            "Hi! I don't recognize this number yet. "
+            "I just sent you a text message with a link to set up your account. "
+            "Once you connect your GitHub and Render, you can call back and I'll be ready to help. "
+            "Goodbye!",
+            voice="Polly.Matthew",
+        )
+        response.hangup()
+        return Response(content=str(response), media_type="application/xml")
+
+    # Existing user - connect to voice pipeline
     response.say(
         "Connecting you to the Render infrastructure assistant.",
         voice="Polly.Matthew",
@@ -112,6 +139,26 @@ async def handle_incoming_call(request: Request) -> Response:
     response.pause(length=3600)  # 1 hour max
 
     return Response(content=str(response), media_type="application/xml")
+
+
+async def _send_signup_sms(phone: str) -> None:
+    """Send SMS with signup link to new caller."""
+    from twilio.rest import Client
+    from urllib.parse import quote
+    
+    signup_url = f"{settings.APP_BASE_URL}/signup?phone={quote(phone)}"
+    message = f"Welcome to Voice Agent! Set up your account here: {signup_url}"
+    
+    try:
+        client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+        client.messages.create(
+            to=phone,
+            from_=settings.TWILIO_PHONE_NUMBER,
+            body=message,
+        )
+        logger.info(f"Sent signup SMS to {phone}")
+    except Exception as e:
+        logger.error(f"Failed to send signup SMS: {e}")
 
 
 async def handle_media_stream(websocket: WebSocket):

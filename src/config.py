@@ -27,13 +27,18 @@ class Settings(BaseSettings):
     RENDER_MCP_URL: str = "https://mcp.render.com/mcp"
 
     # GitHub
-    GITHUB_TOKEN: str
-    GITHUB_REPO_URL: str
+    GITHUB_TOKEN: str  # Default token for single-tenant mode
+    GITHUB_REPO_URL: str  # Default repo for single-tenant mode
+    
+    # GitHub OAuth (for multi-tenant)
+    GITHUB_CLIENT_ID: str | None = None
+    GITHUB_CLIENT_SECRET: str | None = None
 
     # Application
     APP_ENV: str = "development"
     LOG_LEVEL: str = "INFO"
     TARGET_REPO_PATH: str = "/app/target-repo"
+    APP_BASE_URL: str = "https://render-voice-agent-eyyr.onrender.com"  # For OAuth redirects
 
     # Server
     HOST: str = "0.0.0.0"

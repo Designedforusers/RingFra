@@ -65,6 +65,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Include web signup routes
+from src.web.routes import router as signup_router
+app.include_router(signup_router)
+
 
 @app.get("/health")
 async def health_check():
@@ -122,8 +126,10 @@ async def root():
         "service": "Render Voice Agent",
         "version": "1.0.0",
         "description": "Call the phone number to manage your Render infrastructure with voice commands",
+        "phone_number": settings.TWILIO_PHONE_NUMBER,
         "endpoints": {
             "health": "/health",
+            "signup": "/signup",
             "twilio_webhook": "/twilio/incoming",
             "media_stream": "/twilio/media-stream (WebSocket)",
             "render_webhook": "/webhooks/render/deploy",

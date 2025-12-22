@@ -45,6 +45,12 @@ services:
         fromDatabase:
           name: render-voice-agent-db
           property: connectionString
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
 
     healthCheckPath: /health
 
