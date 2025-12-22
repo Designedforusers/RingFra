@@ -3,6 +3,8 @@ Twilio webhook and WebSocket handlers.
 
 Manages the connection between Twilio phone calls
 and the Pipecat voice pipeline.
+
+Follows the official pipecat twilio-chatbot example pattern.
 """
 
 import time
@@ -13,8 +15,10 @@ from fastapi.responses import Response
 from loguru import logger
 from twilio.twiml.voice_response import Connect, Stream, VoiceResponse
 
+from pipecat.runner.utils import parse_telephony_websocket
+
 from src.config import settings
-from src.voice.pipeline import create_voice_pipeline
+from src.voice.pipeline import run_pipeline, set_session_phone
 
 # Import Sentry for error capture if available
 try:
@@ -72,9 +76,10 @@ async def handle_media_stream(websocket: WebSocket):
     """
     Handle WebSocket connection for Twilio media streams.
 
-    Creates and runs the Pipecat voice pipeline for the duration
-    of the call. Pipecat's FastAPIWebsocketTransport handles
-    the WebSocket lifecycle internally.
+    Uses parse_telephony_websocket() to extract call data,
+    then runs the Pipecat voice pipeline directly.
+    
+    Follows the official pipecat twilio-chatbot example pattern.
     """
     call_start = time.time()
     logger.info("=" * 60)
@@ -86,13 +91,27 @@ async def handle_media_stream(websocket: WebSocket):
     logger.info("MEDIA STREAM: WebSocket connection accepted")
 
     try:
-        # Create and run the voice pipeline
-        logger.info("MEDIA STREAM: Creating Pipecat voice pipeline...")
-        pipeline_task = await create_voice_pipeline(websocket)
-        logger.info("MEDIA STREAM: Pipeline created, running...")
+        # Parse Twilio WebSocket messages to get call data
+        # This handles the Connected/Start messages from Twilio
+        logger.info("MEDIA STREAM: Parsing telephony websocket...")
+        _, call_data = await parse_telephony_websocket(websocket)
+        
+        stream_sid = call_data.get("stream_id", "")
+        call_sid = call_data.get("call_id", "")
+        custom_params = call_data.get("body", {})
+        
+        logger.info(f"MEDIA STREAM: stream_sid={stream_sid}, call_sid={call_sid}")
+        logger.info(f"MEDIA STREAM: custom_params={custom_params}")
+        
+        # Store caller phone for notifications if passed via custom params
+        caller_phone = custom_params.get("callerPhone", "")
+        if caller_phone and stream_sid:
+            set_session_phone(stream_sid, caller_phone)
+            logger.info(f"MEDIA STREAM: Stored caller phone {caller_phone} for session")
 
-        # Run the pipeline until the call ends
-        await pipeline_task
+        # Run the voice pipeline (blocking until call ends)
+        logger.info("MEDIA STREAM: Running Pipecat voice pipeline...")
+        await run_pipeline(websocket, stream_sid, call_sid)
 
         call_duration = time.time() - call_start
         logger.info(f"MEDIA STREAM: Call ended normally after {call_duration:.1f}s")
