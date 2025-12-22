@@ -27,11 +27,18 @@ RUN pip install --no-cache-dir .
 COPY src/ src/
 COPY scripts/ scripts/
 
-# Create target repo directory and logs directory
-RUN mkdir -p /app/target-repo /app/logs
+# Create non-root user for Claude Code CLI (requires non-root for --dangerously-skip-permissions)
+RUN useradd -m -s /bin/bash appuser
+
+# Create target repo directory and logs directory with proper ownership
+RUN mkdir -p /app/target-repo /app/logs && \
+    chown -R appuser:appuser /app
 
 # Create .gitkeep for target-repo
 RUN touch /app/target-repo/.gitkeep
+
+# Switch to non-root user
+USER appuser
 
 # Expose port
 EXPOSE 8765
