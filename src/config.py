@@ -6,11 +6,16 @@ Loads from environment variables with validation.
 
 from functools import lru_cache
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """Application settings."""
+    
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+    )
 
     # Twilio
     TWILIO_ACCOUNT_SID: str
@@ -64,10 +69,6 @@ class Settings(BaseSettings):
 
     # Encryption key for storing user credentials
     ENCRYPTION_KEY: str | None = None  # 32-byte key for Fernet encryption
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
 
 
 @lru_cache

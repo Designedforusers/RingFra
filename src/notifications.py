@@ -7,7 +7,7 @@ Notification system for deploy status updates.
 """
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from loguru import logger
@@ -38,7 +38,7 @@ def track_deploy(deploy_id: str, service_name: str, caller_phone: str) -> None:
     _pending_deploys[deploy_id] = {
         "phone": caller_phone,
         "service": service_name,
-        "timestamp": datetime.utcnow(),
+        "timestamp": datetime.now(timezone.utc),
     }
     logger.info(f"Tracking deploy {deploy_id} for {service_name}, will notify {caller_phone}")
 
@@ -48,7 +48,7 @@ def track_deploy(deploy_id: str, service_name: str, caller_phone: str) -> None:
 
 def cleanup_old_deploys() -> None:
     """Remove deploy entries older than 1 hour."""
-    cutoff = datetime.utcnow() - timedelta(hours=1)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
     old_keys = [k for k, v in _pending_deploys.items() if v["timestamp"] < cutoff]
     for key in old_keys:
         del _pending_deploys[key]
