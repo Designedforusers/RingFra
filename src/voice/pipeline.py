@@ -99,7 +99,7 @@ async def create_voice_pipeline(websocket: WebSocket) -> asyncio.Task:
         ),
         serializer=TwilioFrameSerializer(
             stream_sid="",  # Will be set by Twilio
-            auto_hang_up=False,  # Disable auto hang up (requires Twilio creds)
+            params=TwilioFrameSerializer.InputParams(auto_hang_up=False),
         ),
     )
 
