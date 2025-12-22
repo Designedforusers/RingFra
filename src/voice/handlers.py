@@ -81,6 +81,10 @@ async def handle_media_stream(websocket: WebSocket):
     logger.info("MEDIA STREAM: Starting new Twilio WebSocket connection")
     logger.info("=" * 60)
 
+    # Accept the WebSocket connection first
+    await websocket.accept()
+    logger.info("MEDIA STREAM: WebSocket connection accepted")
+
     try:
         # Create and run the voice pipeline
         logger.info("MEDIA STREAM: Creating Pipecat voice pipeline...")
