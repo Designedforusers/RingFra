@@ -119,10 +119,13 @@ async def run_pipeline(
         model=settings.STT_MODEL,
     )
 
-    # === Language Model (Claude) ===
+    # === Language Model (Claude Sonnet 4.5 - latest model) ===
+    # Explicitly use claude-sonnet-4-5-20250929 for best performance
+    model_name = settings.VOICE_MODEL
+    logger.info(f"Using LLM model: {model_name}")
     llm = AnthropicLLMService(
         api_key=settings.ANTHROPIC_API_KEY,
-        model=settings.VOICE_MODEL,
+        model=model_name,
     )
 
     # === Text-to-Speech (Cartesia) ===
