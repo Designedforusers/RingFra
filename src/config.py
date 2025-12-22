@@ -54,6 +54,12 @@ class Settings(BaseSettings):
     REDIS_URL: str | None = None  # Required for proactive features
     OWNER_PHONE: str | None = None  # Phone to call for alerts/monitoring
 
+    # Database (Postgres)
+    DATABASE_URL: str | None = None  # Required for multi-tenant features
+
+    # Encryption key for storing user credentials
+    ENCRYPTION_KEY: str | None = None  # 32-byte key for Fernet encryption
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

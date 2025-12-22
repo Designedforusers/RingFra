@@ -28,6 +28,48 @@ except ImportError:
     HAS_SENTRY = False
 
 
+async def _load_user_context(phone: str) -> dict | None:
+    """
+    Load user context from database for multi-tenant calls.
+    
+    Returns dict with:
+    - user_id: UUID
+    - user: User record
+    - credentials: Dict of provider -> credentials
+    - repos: List of connected repos
+    - memory: Session memory (summary, preferences)
+    """
+    from src.db.users import get_user_by_phone, get_user_credentials, get_user_repos
+    from src.db.memory import get_session_memory
+    
+    user = await get_user_by_phone(phone)
+    if not user:
+        return None
+    
+    user_id = user['id']
+    
+    # Load credentials
+    credentials = {}
+    for provider in ['render', 'github']:
+        creds = await get_user_credentials(user_id, provider)
+        if creds:
+            credentials[provider] = creds
+    
+    # Load repos
+    repos = await get_user_repos(user_id)
+    
+    # Load session memory
+    memory = await get_session_memory(user_id)
+    
+    return {
+        "user_id": user_id,
+        "user": user,
+        "credentials": credentials,
+        "repos": repos,
+        "memory": memory,
+    }
+
+
 async def handle_incoming_call(request: Request) -> Response:
     """
     Handle incoming Twilio call webhook.
@@ -109,6 +151,18 @@ async def handle_media_stream(websocket: WebSocket):
             set_session_phone(stream_sid, caller_phone)
             logger.info(f"MEDIA STREAM: Stored caller phone {caller_phone} for session")
 
+        # Look up user by phone number (multi-tenant)
+        user_context = None
+        if caller_phone and settings.DATABASE_URL:
+            try:
+                user_context = await _load_user_context(caller_phone)
+                if user_context:
+                    logger.info(f"MEDIA STREAM: Loaded context for user {user_context.get('user_id')}")
+                else:
+                    logger.info(f"MEDIA STREAM: No existing user for {caller_phone}")
+            except Exception as e:
+                logger.error(f"MEDIA STREAM: Failed to load user context: {e}")
+
         # Check for callback context (outbound calls)
         call_type = custom_params.get("callType", "inbound")
         callback_context = None
@@ -128,6 +182,7 @@ async def handle_media_stream(websocket: WebSocket):
             call_sid,
             call_type=call_type,
             callback_context=callback_context,
+            user_context=user_context,
         )
 
         call_duration = time.time() - call_start

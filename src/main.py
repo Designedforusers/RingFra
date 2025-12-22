@@ -35,9 +35,27 @@ async def lifespan(app: FastAPI):
     else:
         logger.info(f"Target repo found at {settings.TARGET_REPO_PATH}")
 
+    # Initialize database if configured
+    if settings.DATABASE_URL:
+        try:
+            from src.db.connection import init_schema, close_pool
+            await init_schema()
+            logger.info("Database initialized")
+        except Exception as e:
+            logger.error(f"Database initialization failed: {e}")
+    else:
+        logger.warning("DATABASE_URL not configured - multi-tenant features disabled")
+
     yield
 
+    # Cleanup
     logger.info("Shutting down Render Voice Agent")
+    if settings.DATABASE_URL:
+        try:
+            from src.db.connection import close_pool
+            await close_pool()
+        except Exception:
+            pass
 
 
 app = FastAPI(

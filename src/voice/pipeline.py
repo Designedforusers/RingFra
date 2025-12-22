@@ -76,12 +76,57 @@ def clear_session_phone(stream_sid: str) -> None:
     _session_phones.pop(stream_sid, None)
 
 
+def _build_user_context_prompt(user_context: dict) -> str:
+    """Build a prompt section with user-specific context."""
+    parts = ["## Your User Context\n"]
+    
+    # User info
+    user = user_context.get("user", {})
+    parts.append(f"**Caller:** {user.get('phone', 'Unknown')}")
+    if user.get('email'):
+        parts.append(f" ({user.get('email')})")
+    parts.append("\n\n")
+    
+    # Connected repos
+    repos = user_context.get("repos", [])
+    if repos:
+        parts.append("**Connected Repositories:**\n")
+        for repo in repos:
+            parts.append(f"- {repo.get('github_url')} (branch: {repo.get('default_branch', 'main')})\n")
+        parts.append("\n")
+    
+    # Available credentials
+    credentials = user_context.get("credentials", {})
+    if credentials:
+        parts.append("**Connected Services:**\n")
+        for provider in credentials:
+            parts.append(f"- {provider.title()}: Connected ✓\n")
+        parts.append("\n")
+    
+    # Session memory
+    memory = user_context.get("memory")
+    if memory:
+        if memory.get("summary"):
+            parts.append("**Previous Conversation Context:**\n")
+            parts.append(memory.get("summary"))
+            parts.append("\n\n")
+        
+        if memory.get("preferences"):
+            parts.append("**User Preferences:**\n")
+            import json
+            parts.append(json.dumps(memory.get("preferences"), indent=2))
+            parts.append("\n")
+    
+    return "".join(parts)
+
+
 async def run_pipeline(
     websocket: WebSocket,
     stream_sid: str,
     call_sid: str,
     call_type: str = "inbound",
     callback_context: dict | None = None,
+    user_context: dict | None = None,
 ) -> None:
     """
     Run the Pipecat voice pipeline.
@@ -94,9 +139,11 @@ async def run_pipeline(
         call_sid: Twilio call SID
         call_type: "inbound" or "outbound_*" for callback calls
         callback_context: Context for outbound callback calls
+        user_context: Multi-tenant user context (credentials, repos, memory)
     """
     is_callback = call_type.startswith("outbound_")
-    logger.info(f"Starting pipeline for stream_sid={stream_sid}, call_sid={call_sid}, type={call_type}")
+    has_user = user_context is not None
+    logger.info(f"Starting pipeline for stream_sid={stream_sid}, call_sid={call_sid}, type={call_type}, has_user={has_user}")
 
     # === Serializer with Twilio credentials for auto hang-up ===
     serializer = TwilioFrameSerializer(
@@ -160,6 +207,12 @@ async def run_pipeline(
         logger.info(f"Using callback prompt with context: {callback_context.get('event_type', 'unknown')}")
     else:
         system_prompt = SYSTEM_PROMPT
+
+    # Append user context if available (multi-tenant)
+    if user_context:
+        user_context_prompt = _build_user_context_prompt(user_context)
+        system_prompt = system_prompt + "\n\n" + user_context_prompt
+        logger.info("Appended user context to system prompt")
 
     # Start with system prompt only - greeting added in on_client_connected
     messages = [
