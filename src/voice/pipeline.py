@@ -87,6 +87,7 @@ async def create_voice_pipeline(websocket: WebSocket) -> asyncio.Task:
         asyncio.Task: The running pipeline task
     """
     # === Transport Layer (Twilio WebSocket) ===
+    # In pipecat 0.0.98+, serializer goes inside FastAPIWebsocketParams
     transport = FastAPIWebsocketTransport(
         websocket=websocket,
         params=FastAPIWebsocketParams(
@@ -96,10 +97,10 @@ async def create_voice_pipeline(websocket: WebSocket) -> asyncio.Task:
             vad_enabled=True,
             vad_analyzer=SileroVADAnalyzer(),
             vad_audio_passthrough=True,
-        ),
-        serializer=TwilioFrameSerializer(
-            stream_sid="",  # Will be set by Twilio
-            params=TwilioFrameSerializer.InputParams(auto_hang_up=False),
+            serializer=TwilioFrameSerializer(
+                stream_sid="",  # Will be set by Twilio
+                params=TwilioFrameSerializer.InputParams(auto_hang_up=False),
+            ),
         ),
     )
 
