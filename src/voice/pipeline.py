@@ -21,10 +21,10 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
-from pipecat.services.anthropic import AnthropicLLMService
-from pipecat.services.cartesia import CartesiaTTSService
-from pipecat.services.deepgram import DeepgramSTTService
-from pipecat.transports.network.fastapi_websocket import (
+from pipecat.services.anthropic.llm import AnthropicLLMService
+from pipecat.services.cartesia.tts import CartesiaTTSService
+from pipecat.services.deepgram.stt import DeepgramSTTService
+from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketTransport,
     FastAPIWebsocketParams,
 )

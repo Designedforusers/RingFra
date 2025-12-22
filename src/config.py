@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     # Voice Pipeline
     VOICE_MODEL: str = "claude-sonnet-4-5-20250929"
     STT_MODEL: str = "nova-3"
-    TTS_VOICE: str = "sonic-english-michael"  # Cartesia Sonic English Male
+    TTS_VOICE: str = "228fca29-3a0a-435c-8728-5cb483251068"  # Cartesia "Kiefer" - stable male voice for agents
 
     class Config:
         env_file = ".env"

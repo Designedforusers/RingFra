@@ -8,7 +8,7 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",
-    "pipecat-ai[silero,deepgram,cartesia,anthropic,twilio]>=0.0.47",
+    "pipecat-ai[silero,deepgram,cartesia,anthropic,twilio]>=0.0.98",
     "claude-agent-sdk>=0.1.0",
     "httpx>=0.25.0",
     "pydantic-settings>=2.0.0",
