@@ -25,8 +25,10 @@ from src.repos.manager import (
     get_repo_for_task,
     get_main_for_reading,
     ship_changes,
-    # Types
+    # Types & Enums
     CommitType,
+    TestStrategy,
+    ReviewStrategy,
     TaskResult,
     GitError,
     AuthenticationError,
@@ -49,8 +51,10 @@ __all__ = [
     "get_repo_for_task",
     "get_main_for_reading",
     "ship_changes",
-    # Types
+    # Types & Enums
     "CommitType",
+    "TestStrategy",
+    "ReviewStrategy",
     "TaskResult",
     "GitError",
     "AuthenticationError",

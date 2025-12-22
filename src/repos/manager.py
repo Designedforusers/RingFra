@@ -825,6 +825,21 @@ async def get_main_for_reading(
         return None
 
 
+class TestStrategy(Enum):
+    """Where to run tests."""
+    NONE = "none"           # Skip tests (docs, config)
+    LOCAL = "local"         # Run in worktree before push
+    CI = "ci"               # Let GitHub Actions run after push
+    BOTH = "both"           # Local quick check + CI full matrix
+
+
+class ReviewStrategy(Enum):
+    """PR review strategy."""
+    NONE = "none"           # No review (trusted changes)
+    CLAUDE = "claude"       # Claude Code Action review
+    HUMAN = "human"         # Wait for human review
+
+
 async def ship_changes(
     worktree_path: Path,
     repo_url: str,
@@ -832,11 +847,15 @@ async def ship_changes(
     github_token: str,
     title: str,
     description: str = "",
-    run_tests_command: str | None = None,
+    test_strategy: TestStrategy = TestStrategy.CI,
+    local_test_command: str | None = None,
+    review_strategy: ReviewStrategy = ReviewStrategy.CLAUDE,
+    review_model: str = "claude-sonnet-4-20250514",
+    review_effort: str = "medium",
     auto_merge: bool = False,
 ) -> TaskResult:
     """
-    Complete workflow: commit, test, rebase, push, create PR.
+    Complete workflow: test, rebase, push, create PR, optionally review.
     
     This is the "ship it" command for the voice agent.
     
@@ -847,28 +866,33 @@ async def ship_changes(
         github_token: GitHub access token
         title: PR title
         description: PR description
-        run_tests_command: Optional test command to run first
-        auto_merge: Whether to auto-merge if tests pass
+        test_strategy: Where to run tests (none/local/ci/both)
+        local_test_command: Command for local tests (e.g., "pytest")
+        review_strategy: PR review approach (none/claude/human)
+        review_model: Claude model for review (sonnet or opus)
+        review_effort: Review depth (low/medium/high)
+        auto_merge: Whether to auto-merge after passing checks
         
     Returns:
         TaskResult with PR URL or error
     """
     bare_path = worktree_path.parent / ".bare"
     
-    # 1. Run tests if specified
-    if run_tests_command:
-        logger.info(f"Running tests: {run_tests_command}")
+    # 1. Run local tests if requested
+    if test_strategy in (TestStrategy.LOCAL, TestStrategy.BOTH):
+        test_cmd = local_test_command or "npm test || pytest || go test ./..."
+        logger.info(f"Running local tests: {test_cmd}")
         success, output = await _run_git_command(
-            run_tests_command,
+            test_cmd,
             cwd=worktree_path,
         )
         if not success:
             return TaskResult(
                 False,
-                f"Tests failed - not shipping. Output: {output[:200]}",
-                {"tests_failed": True}
+                f"Local tests failed - not shipping. Run with test_strategy=CI to skip local tests. Output: {output[:200]}",
+                {"tests_failed": True, "stage": "local_tests"}
             )
-        logger.info("Tests passed")
+        logger.info("Local tests passed")
     
     # 2. Rebase on latest main
     rebase_result = await rebase_on_latest(worktree_path, bare_path, github_token, repo_url)
@@ -881,7 +905,7 @@ async def ship_changes(
         return push_result
     
     # 4. Create PR
-    from src.github.actions import create_pull_request, parse_repo_url
+    from src.github.actions import create_pull_request, parse_repo_url, trigger_claude_review
     
     try:
         owner, repo = parse_repo_url(repo_url)
@@ -891,11 +915,22 @@ async def ship_changes(
     # Detect default branch for PR base
     default_branch = await _detect_default_branch(bare_path, github_token)
     
+    # Build PR body with context
+    pr_body = description
+    if test_strategy == TestStrategy.NONE:
+        pr_body += "\n\n---\n_Tests skipped (documentation/config change)_"
+    elif test_strategy == TestStrategy.LOCAL:
+        pr_body += "\n\n---\n_Local tests passed_"
+    elif test_strategy == TestStrategy.CI:
+        pr_body += "\n\n---\n_Awaiting CI tests_"
+    elif test_strategy == TestStrategy.BOTH:
+        pr_body += "\n\n---\n_Local tests passed, awaiting CI_"
+    
     pr = await create_pull_request(
         owner=owner,
         repo=repo,
         title=title,
-        body=description,
+        body=pr_body,
         head=branch_name,
         base=default_branch,
         github_token=github_token,
@@ -909,13 +944,90 @@ async def ship_changes(
     
     logger.info(f"Created PR #{pr_number}: {pr_url}")
     
-    # 5. Auto-merge if requested and tests passed
-    if auto_merge:
-        # TODO: Enable auto-merge via GitHub API
-        pass
+    # 5. Trigger Claude review if requested
+    review_triggered = False
+    if review_strategy == ReviewStrategy.CLAUDE:
+        try:
+            review_result = await trigger_claude_review(
+                owner=owner,
+                repo=repo,
+                pr_number=pr_number,
+                github_token=github_token,
+                model=review_model,
+                effort=review_effort,
+            )
+            if review_result:
+                review_triggered = True
+                logger.info(f"Triggered Claude review for PR #{pr_number}")
+        except Exception as e:
+            logger.warning(f"Failed to trigger Claude review: {e}")
     
-    return TaskResult(
-        True,
-        f"Created PR #{pr_number}",
-        {"pr_url": pr_url, "pr_number": pr_number, "branch": branch_name}
-    )
+    # 6. Enable auto-merge if requested
+    if auto_merge:
+        await _enable_auto_merge(owner, repo, pr_number, github_token)
+    
+    result_data = {
+        "pr_url": pr_url,
+        "pr_number": pr_number,
+        "branch": branch_name,
+        "test_strategy": test_strategy.value,
+        "review_strategy": review_strategy.value,
+        "review_triggered": review_triggered,
+        "auto_merge": auto_merge,
+    }
+    
+    # Build response message
+    msg_parts = [f"Created PR #{pr_number}"]
+    if review_triggered:
+        msg_parts.append("Claude review started")
+    if test_strategy in (TestStrategy.CI, TestStrategy.BOTH):
+        msg_parts.append("CI tests running")
+    if auto_merge:
+        msg_parts.append("will auto-merge when checks pass")
+    
+    return TaskResult(True, " - ".join(msg_parts), result_data)
+
+
+async def _enable_auto_merge(owner: str, repo: str, pr_number: int, github_token: str) -> bool:
+    """Enable auto-merge on a PR via GitHub API."""
+    import httpx
+    
+    # First, get the PR to find the node_id
+    url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}"
+    headers = {
+        "Authorization": f"Bearer {github_token}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(url, headers=headers)
+        if resp.status_code != 200:
+            logger.warning(f"Failed to get PR for auto-merge: {resp.status_code}")
+            return False
+        
+        node_id = resp.json().get("node_id")
+        if not node_id:
+            return False
+        
+        # Enable auto-merge via GraphQL
+        graphql_url = "https://api.github.com/graphql"
+        mutation = """
+        mutation($pullRequestId: ID!) {
+            enablePullRequestAutoMerge(input: {pullRequestId: $pullRequestId, mergeMethod: SQUASH}) {
+                pullRequest { autoMergeRequest { enabledAt } }
+            }
+        }
+        """
+        
+        resp = await client.post(
+            graphql_url,
+            headers=headers,
+            json={"query": mutation, "variables": {"pullRequestId": node_id}}
+        )
+        
+        if resp.status_code == 200:
+            logger.info(f"Enabled auto-merge for PR #{pr_number}")
+            return True
+        else:
+            logger.warning(f"Failed to enable auto-merge: {resp.text}")
+            return False
