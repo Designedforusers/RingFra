@@ -144,6 +144,11 @@ async def run_pipeline(
     is_callback = call_type.startswith("outbound_")
     has_user = user_context is not None
     logger.info(f"Starting pipeline for stream_sid={stream_sid}, call_sid={call_sid}, type={call_type}, has_user={has_user}")
+    
+    # Set user context for code tools (multi-tenant)
+    if user_context:
+        from src.tools.code_tools import set_current_user_context
+        set_current_user_context(user_context)
 
     # === Serializer with Twilio credentials for auto hang-up ===
     serializer = TwilioFrameSerializer(
@@ -305,6 +310,14 @@ async def run_pipeline(
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
         logger.info("Client disconnected")
+        
+        # Save session memory if we have user context
+        if user_context and settings.DATABASE_URL:
+            try:
+                await _save_session_memory(user_context["user_id"], messages)
+            except Exception as e:
+                logger.error(f"Failed to save session memory: {e}")
+        
         if stream_sid:
             clear_session_phone(stream_sid)
         await task.cancel()
@@ -312,3 +325,60 @@ async def run_pipeline(
     # === Run Pipeline ===
     runner = PipelineRunner(handle_sigint=False, force_gc=True)
     await runner.run(task)
+
+
+async def _save_session_memory(user_id, messages: list) -> None:
+    """
+    Summarize the conversation and save to session memory.
+    
+    Uses Claude to generate a concise summary of what was discussed/done.
+    """
+    from anthropic import AsyncAnthropic
+    from src.db.memory import update_session_memory
+    
+    # Filter to just user/assistant messages (skip system)
+    conversation = []
+    for msg in messages:
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+        if role in ["user", "assistant"] and content:
+            conversation.append(f"{role.upper()}: {content}")
+    
+    if not conversation:
+        logger.debug("No conversation to summarize")
+        return
+    
+    transcript = "\n".join(conversation[-20:])  # Last 20 messages max
+    
+    # Generate summary with Claude
+    client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    
+    try:
+        response = await client.messages.create(
+            model="claude-sonnet-4-5-20250929",
+            max_tokens=500,
+            messages=[{
+                "role": "user",
+                "content": f"""Summarize this voice agent conversation for future context. Be concise (2-4 sentences).
+
+Include:
+- What was worked on or discussed
+- Any actions taken (deploys, fixes, etc.)
+- Anything left incomplete
+- User preferences learned
+
+Conversation:
+{transcript}
+
+Summary:"""
+            }]
+        )
+        
+        summary = response.content[0].text.strip()
+        
+        # Save to database
+        await update_session_memory(user_id, summary=summary)
+        logger.info(f"Saved session memory for user {user_id}: {summary[:100]}...")
+        
+    except Exception as e:
+        logger.error(f"Failed to generate session summary: {e}")

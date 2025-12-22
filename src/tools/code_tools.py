@@ -17,10 +17,27 @@ from loguru import logger
 from src.config import settings
 
 
+# Thread-local storage for current user context
+_current_user_context: dict | None = None
+
+
+def set_current_user_context(context: dict | None) -> None:
+    """Set the current user context for code tools."""
+    global _current_user_context
+    _current_user_context = context
+
+
+def get_current_user_context() -> dict | None:
+    """Get the current user context."""
+    return _current_user_context
+
+
 def get_agent_options(
     allowed_tools: list[str] | None = None,
     permission_mode: str = "default",
     include_render_mcp: bool = True,
+    repo_path: str | None = None,
+    render_api_key: str | None = None,
 ) -> ClaudeAgentOptions:
     """
     Build Claude Agent SDK options with MCP servers configured.
@@ -29,11 +46,16 @@ def get_agent_options(
         allowed_tools: List of allowed tools
         permission_mode: Permission mode (default, acceptEdits, bypassPermissions)
         include_render_mcp: Whether to include Render MCP server
+        repo_path: Custom repo path (for multi-tenant)
+        render_api_key: Custom Render API key (for multi-tenant)
 
     Returns:
         ClaudeAgentOptions: Configured options for the SDK
     """
     mcp_servers = {}
+
+    # Use user's Render API key if available
+    api_key = render_api_key or settings.RENDER_API_KEY
 
     if include_render_mcp:
         # Render MCP for infrastructure operations
@@ -41,11 +63,17 @@ def get_agent_options(
             "type": "http",
             "url": "https://mcp.render.com/mcp",
             "headers": {
-                "Authorization": f"Bearer {settings.RENDER_API_KEY}"
+                "Authorization": f"Bearer {api_key}"
             }
         }
 
-    working_dir = settings.TARGET_REPO_PATH if os.path.exists(settings.TARGET_REPO_PATH) else os.getcwd()
+    # Use provided repo path, or user's repo, or default
+    if repo_path:
+        working_dir = repo_path
+    elif os.path.exists(settings.TARGET_REPO_PATH):
+        working_dir = settings.TARGET_REPO_PATH
+    else:
+        working_dir = os.getcwd()
 
     return ClaudeAgentOptions(
         cwd=working_dir,
