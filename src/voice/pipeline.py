@@ -17,6 +17,8 @@ import os
 from fastapi import WebSocket
 from loguru import logger
 
+from pipecat.adapters.schemas.function_schema import FunctionSchema
+from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
@@ -130,13 +132,25 @@ async def run_pipeline(
     )
 
     # === Conversation Context ===
-    tools_config = get_tools_config()
+    # Convert tool configs to FunctionSchema objects for ToolsSchema
+    raw_tools = get_tools_config()
+    function_schemas = []
+    for tool in raw_tools:
+        schema = FunctionSchema(
+            name=tool["name"],
+            description=tool.get("description", ""),
+            properties=tool.get("input_schema", {}).get("properties", {}),
+            required=tool.get("input_schema", {}).get("required", []),
+        )
+        function_schemas.append(schema)
+    
+    tools = ToolsSchema(standard_tools=function_schemas)
 
     # Start with system prompt only - greeting added in on_client_connected
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
     ]
-    context = LLMContext(messages, tools_config)
+    context = LLMContext(messages, tools)
     context_aggregator = LLMContextAggregatorPair(context)
 
     # === Tool Handler (using FunctionCallParams API) ===
@@ -161,7 +175,7 @@ async def run_pipeline(
             await params.result_callback(f"Error executing {function_name}: {str(e)}")
 
     # Register tool handlers for each tool
-    for tool in tools_config:
+    for tool in raw_tools:
         tool_name = tool.get("name")
         if tool_name:
             llm.register_function(tool_name, handle_tool_call)
