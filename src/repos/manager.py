@@ -222,6 +222,14 @@ async def create_task_worktree(
     if not bare_path.exists():
         await setup_repo(user_id, repo_url, github_token)
     
+    # Always fetch latest before creating task branch
+    auth_url = _build_auth_url(repo_url, github_token)
+    await _run_git_command(
+        f'git fetch "{auth_url}" --prune',
+        cwd=bare_path,
+        github_token=github_token,
+    )
+    
     # Generate branch name
     task_id = str(uuid.uuid4())[:8]
     if task_description:
