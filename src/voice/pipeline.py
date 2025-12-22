@@ -79,7 +79,11 @@ async def create_voice_pipeline(websocket: WebSocket) -> asyncio.Task:
             vad_analyzer=SileroVADAnalyzer(),
             vad_audio_passthrough=True,
         ),
-        serializer=TwilioFrameSerializer(stream_sid=""),  # Will be set by Twilio
+        serializer=TwilioFrameSerializer(
+            stream_sid="",  # Will be set by Twilio
+            account_sid=settings.TWILIO_ACCOUNT_SID,
+            auth_token=settings.TWILIO_AUTH_TOKEN,
+        ),
     )
 
     # === Speech-to-Text (Deepgram) ===
