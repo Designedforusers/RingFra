@@ -64,6 +64,11 @@ async def get_service_by_name(service_name: str) -> dict | None:
 
 def get_render_agent_options() -> ClaudeAgentOptions:
     """Get Claude Agent SDK options configured for Render MCP."""
+    
+    def stderr_callback(line: str) -> None:
+        """Log stderr from Claude CLI subprocess."""
+        logger.warning(f"Claude CLI stderr: {line}")
+    
     return ClaudeAgentOptions(
         mcp_servers={
             "render": {
@@ -75,6 +80,7 @@ def get_render_agent_options() -> ClaudeAgentOptions:
             }
         },
         permission_mode="bypassPermissions",
+        stderr=stderr_callback,
     )
 
 
@@ -82,9 +88,12 @@ async def run_render_agent(prompt: str) -> str:
     """Run a query against Render MCP via Claude Agent SDK."""
     result_text = ""
     options = get_render_agent_options()
+    
+    logger.info(f"Starting Claude Agent SDK query...")
 
     try:
         async for message in query(prompt=prompt, options=options):
+            logger.debug(f"Received message type: {type(message)}")
             if isinstance(message, dict):
                 msg_type = message.get("type")
                 msg_subtype = message.get("subtype")
@@ -122,9 +131,12 @@ async def run_render_agent(prompt: str) -> str:
                             result_text = str(result)
 
     except Exception as e:
+        import traceback
         logger.error(f"Render agent error: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         result_text = f"Error: {str(e)}"
 
+    logger.info(f"Claude Agent SDK query completed, result length: {len(result_text)}")
     return result_text
 
 
