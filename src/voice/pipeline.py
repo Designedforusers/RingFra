@@ -18,7 +18,7 @@ import os
 from fastapi import WebSocket
 from loguru import logger
 
-from pipecat.frames.frames import EndFrame, LLMMessagesUpdateFrame
+from pipecat.frames.frames import EndFrame, LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -211,17 +211,13 @@ async def create_voice_pipeline(websocket: WebSocket) -> asyncio.Task:
         logger.info("WELCOME: Waiting 0.5s before sending greeting...")
         await asyncio.sleep(0.5)  # Brief delay for connection
         logger.info("WELCOME: Queueing initial greeting message to LLM")
-        # Use LLMMessagesUpdateFrame with run_llm=True (replaces deprecated LLMMessagesFrame)
-        initial_message = LLMMessagesUpdateFrame(
-            messages=[
-                {
-                    "role": "user",
-                    "content": "Greet the user briefly and ask how you can help with their Render infrastructure today.",
-                }
-            ],
-            run_llm=True,
-        )
-        await task.queue_frame(initial_message)
+        
+        # Add the greeting prompt to context messages and trigger LLM with LLMRunFrame
+        context.messages.append({
+            "role": "user",
+            "content": "Greet the user briefly and ask how you can help with their Render infrastructure today.",
+        })
+        await task.queue_frame(LLMRunFrame())
         logger.info("WELCOME: Initial greeting queued successfully")
 
     # === Run Pipeline ===
