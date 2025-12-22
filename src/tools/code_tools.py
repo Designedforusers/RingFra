@@ -359,3 +359,150 @@ Keep under 25 words."""
     result = await run_agent(prompt, options)
 
     return result or "Changes committed and pushed."
+
+
+async def trigger_pr_review(
+    pr_number: int,
+    model: str = "claude-sonnet-4-20250514",
+    effort: str = "medium",
+) -> str:
+    """
+    Trigger Claude Code Action to review a PR.
+    
+    Uses the current user context for credentials.
+    
+    Args:
+        pr_number: PR number to review
+        model: Claude model (sonnet or opus)
+        effort: Review effort (low/medium/high)
+        
+    Returns:
+        Status message
+    """
+    from src.github.actions import trigger_claude_review, parse_repo_url
+    
+    user_ctx = get_current_user_context()
+    if not user_ctx:
+        return "No user context - can't trigger review"
+    
+    repos = user_ctx.get("repos", [])
+    if not repos:
+        return "No repos configured"
+    
+    creds = user_ctx.get("credentials", {}).get("github", {})
+    token = creds.get("access_token")
+    if not token:
+        return "No GitHub token"
+    
+    # Use first repo
+    repo_url = repos[0].get("github_url", "")
+    try:
+        owner, repo = parse_repo_url(repo_url)
+    except ValueError:
+        return f"Invalid repo URL: {repo_url}"
+    
+    result = await trigger_claude_review(
+        owner=owner,
+        repo=repo,
+        pr_number=pr_number,
+        github_token=token,
+        model=model,
+        effort=effort,
+    )
+    
+    if result:
+        run_id = result.get("id")
+        return f"Started Claude review for PR #{pr_number}. Workflow run: {run_id}"
+    else:
+        return "Failed to trigger review. Make sure claude-code-action.yml workflow exists."
+
+
+async def trigger_test_run(branch: str = "main") -> str:
+    """
+    Trigger test workflow on GitHub Actions.
+    
+    Args:
+        branch: Branch to test
+        
+    Returns:
+        Status message
+    """
+    from src.github.actions import trigger_tests, parse_repo_url
+    
+    user_ctx = get_current_user_context()
+    if not user_ctx:
+        return "No user context - can't trigger tests"
+    
+    repos = user_ctx.get("repos", [])
+    if not repos:
+        return "No repos configured"
+    
+    creds = user_ctx.get("credentials", {}).get("github", {})
+    token = creds.get("access_token")
+    if not token:
+        return "No GitHub token"
+    
+    repo_url = repos[0].get("github_url", "")
+    try:
+        owner, repo = parse_repo_url(repo_url)
+    except ValueError:
+        return f"Invalid repo URL: {repo_url}"
+    
+    result = await trigger_tests(
+        owner=owner,
+        repo=repo,
+        branch=branch,
+        github_token=token,
+    )
+    
+    if result:
+        run_id = result.get("id")
+        return f"Started tests on branch {branch}. Workflow run: {run_id}"
+    else:
+        return "Failed to trigger tests. Make sure test.yml workflow exists."
+
+
+async def check_workflow_status(run_id: int) -> str:
+    """
+    Check the status of a GitHub Actions workflow run.
+    
+    Args:
+        run_id: Workflow run ID
+        
+    Returns:
+        Status message
+    """
+    from src.github.actions import get_workflow_status, parse_repo_url
+    
+    user_ctx = get_current_user_context()
+    if not user_ctx:
+        return "No user context"
+    
+    repos = user_ctx.get("repos", [])
+    if not repos:
+        return "No repos configured"
+    
+    creds = user_ctx.get("credentials", {}).get("github", {})
+    token = creds.get("access_token")
+    if not token:
+        return "No GitHub token"
+    
+    repo_url = repos[0].get("github_url", "")
+    try:
+        owner, repo = parse_repo_url(repo_url)
+    except ValueError:
+        return f"Invalid repo URL: {repo_url}"
+    
+    status = await get_workflow_status(owner, repo, run_id, token)
+    
+    if status:
+        state = status.get("status", "unknown")
+        conclusion = status.get("conclusion")
+        name = status.get("name", "Workflow")
+        
+        if conclusion:
+            return f"{name}: {conclusion}"
+        else:
+            return f"{name}: {state} (in progress)"
+    else:
+        return f"Couldn't get status for run {run_id}"
