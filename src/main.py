@@ -12,7 +12,7 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, WebSocket
-from fastapi.responses import Response
+from fastapi.responses import Response, HTMLResponse
 from loguru import logger
 
 from src.config import settings
@@ -119,9 +119,16 @@ async def render_deploy_webhook(request: Request):
     return await handle_render_webhook(payload)
 
 
-@app.get("/")
+@app.get("/", response_class=HTMLResponse)
 async def root():
-    """Root endpoint with service info."""
+    """Landing page."""
+    from src.web.landing import render_landing_page
+    return render_landing_page()
+
+
+@app.get("/api")
+async def api_info():
+    """API info endpoint."""
     return {
         "service": "Render Voice Agent",
         "version": "1.0.0",
