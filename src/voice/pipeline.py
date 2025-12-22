@@ -18,7 +18,7 @@ import os
 from fastapi import WebSocket
 from loguru import logger
 
-from pipecat.frames.frames import LLMMessagesFrame, EndFrame
+from pipecat.frames.frames import EndFrame, LLMMessagesUpdateFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -26,6 +26,7 @@ from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 from pipecat.services.anthropic.llm import AnthropicLLMService
 from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.deepgram.stt import DeepgramSTTService
+from pipecat.services.llm_service import FunctionCallParams
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketTransport,
     FastAPIWebsocketParams,
@@ -94,9 +95,7 @@ async def create_voice_pipeline(websocket: WebSocket) -> asyncio.Task:
             audio_in_enabled=True,
             audio_out_enabled=True,
             add_wav_header=False,
-            vad_enabled=True,
             vad_analyzer=SileroVADAnalyzer(),
-            vad_audio_passthrough=True,
             serializer=TwilioFrameSerializer(
                 stream_sid="",  # Will be set by Twilio
                 params=TwilioFrameSerializer.InputParams(auto_hang_up=False),
@@ -134,16 +133,12 @@ async def create_voice_pipeline(websocket: WebSocket) -> asyncio.Task:
     # Track stream SID for caller phone lookup
     stream_sid: str | None = None
 
-    # === Tool Handler ===
-    async def handle_tool_call(
-        function_name: str,
-        tool_call_id: str,
-        arguments: dict,
-        llm: AnthropicLLMService,
-        context: OpenAILLMContext,
-        result_callback,
-    ):
+    # === Tool Handler (using new FunctionCallParams API) ===
+    async def handle_tool_call(params: FunctionCallParams):
         """Handle tool calls from the LLM."""
+        function_name = params.function_name
+        arguments = params.arguments
+
         logger.info(f"Tool call: {function_name} with args: {arguments}")
 
         try:
@@ -154,10 +149,10 @@ async def create_voice_pipeline(websocket: WebSocket) -> asyncio.Task:
                     arguments["caller_phone"] = caller_phone
 
             result = await execute_tool(function_name, arguments)
-            await result_callback(result)
+            await params.result_callback(result)
         except Exception as e:
             logger.error(f"Tool execution error: {e}")
-            await result_callback(f"Error executing {function_name}: {str(e)}")
+            await params.result_callback(f"Error executing {function_name}: {str(e)}")
 
     # Register tool handlers for each tool
     for tool in tools_config:
@@ -187,20 +182,22 @@ async def create_voice_pipeline(websocket: WebSocket) -> asyncio.Task:
     logger.info("Pipeline observers initialized: metrics, transcription, LLM")
 
     # === Task Runner ===
+    # Note: observers passed directly to PipelineTask, not in PipelineParams
     task = PipelineTask(
         pipeline,
         params=PipelineParams(
             allow_interruptions=True,
             enable_metrics=True,
-            observers=observers,
         ),
+        observers=observers,
     )
 
     # === Event Handlers ===
+    # Note: FastAPIWebsocketTransport only supports on_client_connected, 
+    # on_client_disconnected, and on_session_timeout
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info("PIPELINE EVENT: Twilio client connected")
-        logger.info(f"PIPELINE EVENT: Client info: {client}")
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
@@ -208,34 +205,21 @@ async def create_voice_pipeline(websocket: WebSocket) -> asyncio.Task:
         if stream_sid:
             clear_session_phone(stream_sid)
 
-    @transport.event_handler("on_call_state_updated")
-    async def on_call_state_updated(transport, state):
-        nonlocal stream_sid
-        logger.info(f"PIPELINE EVENT: Call state updated: {state}")
-        if hasattr(state, "stream_sid"):
-            stream_sid = state.stream_sid
-            logger.info(f"PIPELINE EVENT: Stream SID set: {stream_sid}")
-
-        # Extract caller phone from custom parameters if available
-        if hasattr(state, "custom_parameters"):
-            caller_phone = state.custom_parameters.get("callerPhone")
-            if caller_phone and stream_sid:
-                set_session_phone(stream_sid, caller_phone)
-                logger.info(f"PIPELINE EVENT: Caller phone captured: {caller_phone}")
-
     # === Welcome Message ===
     # Queue initial greeting after pipeline starts
     async def send_welcome():
         logger.info("WELCOME: Waiting 0.5s before sending greeting...")
         await asyncio.sleep(0.5)  # Brief delay for connection
         logger.info("WELCOME: Queueing initial greeting message to LLM")
-        initial_message = LLMMessagesFrame(
-            [
+        # Use LLMMessagesUpdateFrame with run_llm=True (replaces deprecated LLMMessagesFrame)
+        initial_message = LLMMessagesUpdateFrame(
+            messages=[
                 {
                     "role": "user",
                     "content": "Greet the user briefly and ask how you can help with their Render infrastructure today.",
                 }
-            ]
+            ],
+            run_llm=True,
         )
         await task.queue_frame(initial_message)
         logger.info("WELCOME: Initial greeting queued successfully")
