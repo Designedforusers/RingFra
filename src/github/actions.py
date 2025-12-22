@@ -268,3 +268,58 @@ def parse_repo_url(repo_url: str) -> tuple[str, str]:
         return parts[-2], parts[-1]
     
     raise ValueError(f"Invalid repo URL: {repo_url}")
+
+
+async def push_and_create_pr(
+    worktree_path,
+    repo_url: str,
+    branch_name: str,
+    github_token: str,
+    title: str,
+    body: str = "",
+    base: str = "main",
+) -> dict | None:
+    """
+    Push branch and create a pull request.
+    
+    High-level helper that combines push + PR creation.
+    
+    Args:
+        worktree_path: Path to the worktree (for pushing)
+        repo_url: GitHub repo URL
+        branch_name: Branch to push and PR from
+        github_token: GitHub access token
+        title: PR title
+        body: PR body/description
+        base: Base branch (default: main)
+        
+    Returns:
+        PR info dict or None if failed
+    """
+    from src.repos.manager import push_branch
+    
+    # Push the branch
+    success = await push_branch(worktree_path, github_token, repo_url)
+    if not success:
+        logger.error("Failed to push branch")
+        return None
+    
+    # Parse owner/repo
+    try:
+        owner, repo = parse_repo_url(repo_url)
+    except ValueError as e:
+        logger.error(str(e))
+        return None
+    
+    # Create the PR
+    pr = await create_pull_request(
+        owner=owner,
+        repo=repo,
+        title=title,
+        body=body,
+        head=branch_name,
+        base=base,
+        github_token=github_token,
+    )
+    
+    return pr
