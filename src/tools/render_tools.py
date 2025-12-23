@@ -209,11 +209,14 @@ async def run_render_agent(prompt: str, timeout: float = 30.0) -> str:
                     # AssistantMessage contains Claude's response
                     elif class_name == "AssistantMessage":
                         content = getattr(message, "content", None)
+                        logger.info(f"AssistantMessage content: {content}")
                         if content and isinstance(content, list):
                             for block in content:
                                 # Check for TextBlock
-                                block_type = getattr(block, "type", None) or type(block).__name__
-                                if block_type in ("text", "TextBlock"):
+                                block_class = type(block).__name__
+                                block_type = getattr(block, "type", None)
+                                logger.info(f"Content block: class={block_class}, type={block_type}, attrs={dir(block)}")
+                                if block_class == "TextBlock" or block_type == "text":
                                     text = getattr(block, "text", "")
                                     if text:
                                         result_text = text
