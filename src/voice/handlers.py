@@ -18,7 +18,17 @@ from twilio.twiml.voice_response import Connect, Stream, VoiceResponse
 from pipecat.runner.utils import parse_telephony_websocket
 
 from src.config import settings
-from src.voice.pipeline import run_pipeline, set_session_phone
+
+# Import both pipeline implementations
+from src.voice.pipeline import run_pipeline as run_pipecat_pipeline, set_session_phone
+
+# SDK pipeline is optional - only import if SDK is available
+try:
+    from src.voice.sdk_pipeline import run_sdk_pipeline
+    SDK_AVAILABLE = True
+except ImportError:
+    SDK_AVAILABLE = False
+    run_sdk_pipeline = None
 
 # Import Sentry for error capture if available
 try:
@@ -222,15 +232,30 @@ async def handle_media_stream(websocket: WebSocket):
                 logger.warning("MEDIA STREAM: Failed to parse callback context")
 
         # Run the voice pipeline (blocking until call ends)
-        logger.info(f"MEDIA STREAM: Running Pipecat voice pipeline (type={call_type})...")
-        await run_pipeline(
-            websocket,
-            stream_sid,
-            call_sid,
-            call_type=call_type,
-            callback_context=callback_context,
-            user_context=user_context,
-        )
+        # Use SDK pipeline for full Claude Code capabilities (if available)
+        use_sdk = settings.USE_SDK_PIPELINE and SDK_AVAILABLE
+        logger.info(f"MEDIA STREAM: Running {'SDK' if use_sdk else 'Pipecat'} voice pipeline (type={call_type})...")
+        
+        if use_sdk and run_sdk_pipeline:
+            await run_sdk_pipeline(
+                websocket,
+                stream_sid,
+                call_sid,
+                call_type=call_type,
+                callback_context=callback_context,
+                user_context=user_context,
+            )
+        else:
+            if settings.USE_SDK_PIPELINE and not SDK_AVAILABLE:
+                logger.warning("SDK pipeline requested but claude-agent-sdk not installed, using Pipecat")
+            await run_pipecat_pipeline(
+                websocket,
+                stream_sid,
+                call_sid,
+                call_type=call_type,
+                callback_context=callback_context,
+                user_context=user_context,
+            )
 
         call_duration = time.time() - call_start
         logger.info(f"MEDIA STREAM: Call ended normally after {call_duration:.1f}s")

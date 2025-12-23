@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     VOICE_MODEL: str = "claude-sonnet-4-5-20250929"
     STT_MODEL: str = "nova-3"
     TTS_VOICE: str = "228fca29-3a0a-435c-8728-5cb483251068"  # Cartesia "Kiefer" - stable male voice for agents
+    USE_SDK_PIPELINE: bool = True  # Use Claude Agent SDK (True) or Pipecat LLM (False)
 
     # Observability
     SENTRY_DSN: str | None = None  # Optional: Sentry error tracking
