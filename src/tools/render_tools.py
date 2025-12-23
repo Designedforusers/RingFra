@@ -245,7 +245,9 @@ async def list_services() -> str:
 
     # Try MCP first
     try:
-        prompt = """Use the Render MCP to list all services in the current workspace.
+        prompt = """First, use the Render MCP to get the selected workspace. If no workspace is selected, list available workspaces and select the first one.
+
+Then list all services in that workspace.
 
 Respond concisely (this will be spoken aloud):
 - How many services are there
