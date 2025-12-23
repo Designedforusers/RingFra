@@ -106,6 +106,58 @@ async def set_reminder_tool(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@tool("setup_claude_github_action", "Add Claude Code Action to a GitHub repo for AI-powered PR reviews", {
+    "repo_url": str,  # GitHub repo URL
+    "workflow_type": str,  # "interactive", "auto_review", "judge", or "full"
+})
+async def setup_claude_github_action_tool(args: dict[str, Any]) -> dict[str, Any]:
+    """Add Claude Code Action workflow to a repo."""
+    from src.github.workflow_template import setup_repo_for_claude
+    from src.github.actions import parse_repo_url
+    
+    repo_url = args["repo_url"]
+    workflow_type = args.get("workflow_type", "full")
+    
+    # Need GitHub token from user context
+    # This is injected at runtime
+    github_token = args.get("_github_token")
+    if not github_token:
+        return {
+            "content": [{"type": "text", "text": "No GitHub token available. User needs to connect GitHub."}],
+            "is_error": True,
+        }
+    
+    try:
+        owner, repo = parse_repo_url(repo_url)
+    except ValueError as e:
+        return {
+            "content": [{"type": "text", "text": f"Invalid repo URL: {e}"}],
+            "is_error": True,
+        }
+    
+    result = await setup_repo_for_claude(
+        owner=owner,
+        repo=repo,
+        github_token=github_token,
+        workflow_type=workflow_type,
+    )
+    
+    messages = "\n".join(result["messages"])
+    
+    if result["workflow_added"]:
+        return {
+            "content": [{
+                "type": "text",
+                "text": f"Claude Code Action added to {owner}/{repo}!\n\n{messages}"
+            }]
+        }
+    else:
+        return {
+            "content": [{"type": "text", "text": f"Setup failed:\n{messages}"}],
+            "is_error": True,
+        }
+
+
 def get_sdk_options(
     user_context: dict | None = None,
     cwd: Path | None = None,
@@ -148,7 +200,7 @@ def get_sdk_options(
         if github_creds.get("access_token"):
             github_token = github_creds["access_token"]
     
-    # Create custom MCP server for proactive tools
+    # Create custom MCP server for proactive + setup tools
     # Note: Git/GitHub operations are handled via gh CLI in Bash
     proactive_server = create_sdk_mcp_server(
         name="proactive",
@@ -157,6 +209,7 @@ def get_sdk_options(
             schedule_callback_tool,
             send_sms_tool,
             set_reminder_tool,
+            setup_claude_github_action_tool,
         ],
     )
     
@@ -246,6 +299,7 @@ def get_sdk_options(
             "mcp__proactive__schedule_callback",
             "mcp__proactive__send_sms",
             "mcp__proactive__set_reminder",
+            "mcp__proactive__setup_claude_github_action",
         ],
         
         # Enable partial message streaming for TTS
@@ -266,6 +320,7 @@ def _build_system_prompt(user_context: dict | None) -> str:
 - **Git + GitHub CLI**: Full git and `gh` CLI access. Create branches, commits, PRs, merge, review - all via bash.
 - **Infrastructure**: Manage Render services via MCP (deploy, logs, metrics, databases, env vars).
 - **Proactive**: Schedule callbacks ("fix this and call me back"), send SMS updates, set reminders.
+- **Claude Code Action**: Set up AI-powered PR reviews on any repo with setup_claude_github_action tool.
 
 ## Voice Guidelines
 - Keep responses CONCISE - they're spoken aloud
@@ -297,6 +352,7 @@ gh pr merge --squash --delete-branch
 - "Ship it" → git push → gh pr create --fill → gh pr merge
 - "Deploy" → Render MCP trigger deploy
 - "What's using memory?" → Render MCP get_metrics
+- "Set up PR reviews" → setup_claude_github_action with workflow_type="full"
 
 ## Important
 - FULL AUTONOMY - run commands directly
