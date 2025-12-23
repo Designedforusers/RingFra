@@ -46,10 +46,44 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("DATABASE_URL not configured - multi-tenant features disabled")
 
+    # Start ARQ worker in background if Redis is configured
+    arq_task = None
+    if settings.REDIS_URL:
+        try:
+            import asyncio
+            from arq import create_pool
+            from arq.connections import RedisSettings
+            from src.tasks.worker import WorkerSettings
+            
+            async def run_arq_worker():
+                """Run ARQ worker in background."""
+                from arq.worker import run_worker
+                try:
+                    await run_worker(WorkerSettings)
+                except Exception as e:
+                    logger.error(f"ARQ worker error: {e}")
+            
+            arq_task = asyncio.create_task(run_arq_worker())
+            logger.info("ARQ background worker started")
+        except Exception as e:
+            logger.error(f"Failed to start ARQ worker: {e}")
+    else:
+        logger.warning("REDIS_URL not configured - proactive callbacks disabled")
+
     yield
 
     # Cleanup
     logger.info("Shutting down Render Voice Agent")
+    
+    # Cancel ARQ worker
+    if arq_task:
+        arq_task.cancel()
+        try:
+            await arq_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("ARQ worker stopped")
+    
     if settings.DATABASE_URL:
         try:
             from src.db.connection import close_pool
