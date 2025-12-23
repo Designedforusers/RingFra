@@ -65,25 +65,50 @@ async def get_service_by_name(service_name: str) -> dict | None:
 def get_render_agent_options() -> ClaudeAgentOptions:
     """Get Claude Agent SDK options configured for Render MCP.
     
-    Uses HTTP transport with proper authentication headers.
+    Config follows SDK docs exactly for HTTP MCP servers.
     """
     def stderr_callback(line: str) -> None:
         """Log stderr from Claude CLI subprocess."""
         logger.warning(f"Claude CLI stderr: {line}")
     
+    # Log the MCP URL for debugging
+    logger.info(f"Configuring Render MCP at: {settings.RENDER_MCP_URL}")
+    logger.info(f"API key present: {bool(settings.RENDER_API_KEY)}, length: {len(settings.RENDER_API_KEY) if settings.RENDER_API_KEY else 0}")
+    
+    # Allow all Render MCP tools - format is mcp__<server>__<tool>
+    render_tools = [
+        "mcp__render__list_services",
+        "mcp__render__get_service",
+        "mcp__render__list_deploys",
+        "mcp__render__get_deploy",
+        "mcp__render__list_logs",
+        "mcp__render__list_log_label_values",
+        "mcp__render__get_metrics",
+        "mcp__render__list_workspaces",
+        "mcp__render__select_workspace",
+        "mcp__render__get_selected_workspace",
+        "mcp__render__create_web_service",
+        "mcp__render__create_static_site",
+        "mcp__render__update_environment_variables",
+        "mcp__render__list_postgres_instances",
+        "mcp__render__get_postgres",
+        "mcp__render__create_postgres",
+        "mcp__render__query_render_postgres",
+        "mcp__render__list_key_value",
+        "mcp__render__get_key_value",
+        "mcp__render__create_key_value",
+    ]
+    
     return ClaudeAgentOptions(
         mcp_servers={
             "render": {
-                "type": "http",
-                "transport": "http",
                 "url": settings.RENDER_MCP_URL,
                 "headers": {
                     "Authorization": f"Bearer {settings.RENDER_API_KEY}",
-                    "Content-Type": "application/json",
                 },
-                "timeout": 30000,  # 30 second timeout
             }
         },
+        allowed_tools=render_tools,
         permission_mode="bypassPermissions",
         stderr=stderr_callback,
     )
@@ -102,20 +127,41 @@ async def run_render_agent(prompt: str, timeout: float = 30.0) -> str:
     import asyncio
     
     result_text = ""
+    mcp_connected = False
     options = get_render_agent_options()
     
     logger.info("Starting Claude Agent SDK query with Render MCP...")
 
     try:
         async def _run_query():
-            nonlocal result_text
+            nonlocal result_text, mcp_connected
             async for message in query(prompt=prompt, options=options):
-                logger.debug(f"Received message type: {type(message)}")
+                # Log all messages for debugging
                 if isinstance(message, dict):
                     msg_type = message.get("type")
                     msg_subtype = message.get("subtype")
+                    logger.debug(f"Message: type={msg_type}, subtype={msg_subtype}")
+                else:
+                    msg_type = getattr(message, "type", None)
+                    msg_subtype = getattr(message, "subtype", None)
+                    logger.debug(f"Message: type={msg_type}, subtype={msg_subtype}")
+                
+                # Handle dict-style messages
+                if isinstance(message, dict):
+                    # Check MCP connection status from system.init
+                    if msg_type == "system" and msg_subtype == "init":
+                        mcp_servers = message.get("mcp_servers", [])
+                        for server in mcp_servers:
+                            name = server.get("name", "")
+                            status = server.get("status", "")
+                            logger.info(f"MCP server '{name}' status: {status}")
+                            if name == "render":
+                                if status == "connected":
+                                    mcp_connected = True
+                                else:
+                                    logger.error(f"Render MCP failed to connect: {status}")
 
-                    if msg_type == "assistant":
+                    elif msg_type == "assistant":
                         content = message.get("content")
                         if content and isinstance(content, list):
                             for block in content:
@@ -129,12 +175,24 @@ async def run_render_agent(prompt: str, timeout: float = 30.0) -> str:
                                 result_text = str(result)
                         elif msg_subtype in ("error", "error_during_execution"):
                             error = message.get("error")
-                            result_text = f"Error: {error}" if error else "An error occurred"
+                            logger.error(f"SDK error: {error}")
+                            result_text = ""
+                
+                # Handle object-style messages
                 else:
-                    msg_type = getattr(message, "type", None)
-                    msg_subtype = getattr(message, "subtype", None)
+                    if msg_type == "system" and msg_subtype == "init":
+                        mcp_servers = getattr(message, "mcp_servers", [])
+                        for server in mcp_servers:
+                            name = server.get("name") if isinstance(server, dict) else getattr(server, "name", "")
+                            status = server.get("status") if isinstance(server, dict) else getattr(server, "status", "")
+                            logger.info(f"MCP server '{name}' status: {status}")
+                            if name == "render":
+                                if status == "connected":
+                                    mcp_connected = True
+                                else:
+                                    logger.error(f"Render MCP failed to connect: {status}")
 
-                    if msg_type == "assistant":
+                    elif msg_type == "assistant":
                         content = getattr(message, "content", None)
                         if content and isinstance(content, list):
                             for block in content:
@@ -146,6 +204,10 @@ async def run_render_agent(prompt: str, timeout: float = 30.0) -> str:
                             result = getattr(message, "result", None)
                             if result:
                                 result_text = str(result)
+                        elif msg_subtype in ("error", "error_during_execution"):
+                            error = getattr(message, "error", None)
+                            logger.error(f"SDK error: {error}")
+                            result_text = ""
 
         # Run with timeout
         await asyncio.wait_for(_run_query(), timeout=timeout)
@@ -160,9 +222,9 @@ async def run_render_agent(prompt: str, timeout: float = 30.0) -> str:
         result_text = ""
 
     if result_text:
-        logger.info(f"Claude Agent SDK query completed, result length: {len(result_text)}")
+        logger.info(f"Claude Agent SDK query completed, result length: {len(result_text)}, mcp_connected: {mcp_connected}")
     else:
-        logger.warning("Claude Agent SDK query returned empty result")
+        logger.warning(f"Claude Agent SDK query returned empty result, mcp_connected: {mcp_connected}")
     return result_text
 
 
