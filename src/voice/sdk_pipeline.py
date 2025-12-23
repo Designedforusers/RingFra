@@ -8,7 +8,7 @@ and has access to all Claude Code tools + Render MCP.
 Architecture:
     Twilio WebSocket
          ↓
-    Deepgram STT (speech → text)
+    Deepgram Flux STT (speech → text with AI turn detection)
          ↓
     ClaudeSDKClient (persistent session)
     - Code tools (Read, Write, Edit, Bash, etc.)
@@ -26,7 +26,6 @@ from pathlib import Path
 from fastapi import WebSocket
 from loguru import logger
 
-from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import (
     Frame,
     TextFrame,
@@ -40,7 +39,7 @@ from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.serializers.twilio import TwilioFrameSerializer
 from pipecat.services.cartesia.tts import CartesiaTTSService
-from pipecat.services.deepgram.stt import DeepgramSTTService
+from pipecat.services.deepgram.flux.stt import DeepgramFluxSTTService
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketParams,
     FastAPIWebsocketTransport,
@@ -148,21 +147,28 @@ async def run_sdk_pipeline(
         auth_token=settings.TWILIO_AUTH_TOKEN or "",
     )
     
+    # No VAD analyzer needed - Deepgram Flux handles turn detection with AI
     transport = FastAPIWebsocketTransport(
         websocket=websocket,
         params=FastAPIWebsocketParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
             add_wav_header=False,
-            vad_analyzer=SileroVADAnalyzer(),
             serializer=serializer,
         ),
     )
     
-    # === Speech-to-Text (Deepgram Nova-3) ===
-    stt = DeepgramSTTService(
+    # === Speech-to-Text (Deepgram Flux - AI-powered turn detection) ===
+    # Flux uses semantic understanding to detect end-of-turn, not just silence
+    # This prevents mid-sentence splits from pauses
+    stt = DeepgramFluxSTTService(
         api_key=settings.DEEPGRAM_API_KEY,
-        model=settings.STT_MODEL,
+        model="flux-general-en",
+        params=DeepgramFluxSTTService.InputParams(
+            eot_threshold=0.75,       # Slightly higher = wait for more certainty user is done
+            eot_timeout_ms=6000,      # 6 sec max silence before forcing end-of-turn
+            keyterm=["solhedge", "render", "deploy", "github", "commit", "push", "merge"],
+        ),
     )
     
     # === Text-to-Speech (Cartesia) ===
@@ -213,7 +219,7 @@ async def run_sdk_pipeline(
         else:
             greeting = "Hey, I'm your on-call engineer. What can I help you with?"
         
-        await sdk_bridge.push_frame(TTSSpeakFrame(text=greeting))
+        await sdk_bridge.push_frame(TextFrame(text=greeting))
     
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
