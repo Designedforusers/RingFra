@@ -161,19 +161,19 @@ async def run_agent(prompt: str, options: ClaudeAgentOptions) -> str:
     return result_text
 
 
-async def analyze_code(query_text: str) -> str:
+async def analyze_code(query: str) -> str:
     """
     Analyze the codebase to understand or find specific patterns.
 
     Args:
-        query_text: What to analyze (e.g., "authentication flow")
+        query: What to analyze (e.g., "authentication flow")
 
     Returns:
         str: Analysis summary
     """
-    logger.info(f"Analyzing code: {query_text}")
+    logger.info(f"Analyzing code: {query}")
 
-    prompt = f"""Analyze this codebase and answer: {query_text}
+    prompt = f"""Analyze this codebase and answer: {query}
 
 Be concise - this will be spoken aloud. Focus on:
 1. The key files/functions involved
