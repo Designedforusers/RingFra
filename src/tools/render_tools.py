@@ -328,7 +328,7 @@ Keep under 75 words."""
     except Exception as e:
         logger.warning(f"MCP failed for logs, falling back to API: {e}")
 
-    # Fallback to direct API
+    # Fallback to direct API using Render's logs endpoint
     logger.info("Using direct Render API fallback for get_logs")
     try:
         service = await get_service_by_name(service_name)
@@ -336,8 +336,57 @@ Keep under 75 words."""
             return f"I couldn't find a service named '{service_name}'."
         
         service_id = service.get("id")
-        # Note: Render API logs endpoint requires different auth, so provide helpful message
-        return f"I found {service_name} but couldn't fetch logs via API. The service is {'running' if service.get('suspended') == 'not_suspended' else 'suspended'}."
+        
+        # Fetch logs via Render API (uses different endpoint structure)
+        async with httpx.AsyncClient() as client:
+            # Render logs API - GET /services/{serviceId}/logs
+            # Note: This returns streaming logs, we need to use their query endpoint
+            response = await client.get(
+                f"https://api.render.com/v1/services/{service_id}/logs",
+                headers={
+                    "Authorization": f"Bearer {settings.RENDER_API_KEY}",
+                    "Accept": "application/json",
+                },
+                params={"limit": min(lines, 100)},  # API max is usually 100
+                timeout=30.0,
+            )
+            
+            if response.status_code == 200:
+                logs_data = response.json()
+                # Parse and summarize logs
+                log_entries = logs_data if isinstance(logs_data, list) else logs_data.get("logs", [])
+                
+                if not log_entries:
+                    return f"{service_name} is running but has no recent logs."
+                
+                # Extract log messages and analyze
+                messages = []
+                errors = []
+                warnings = []
+                
+                for entry in log_entries[:lines]:
+                    msg = entry.get("message", "") if isinstance(entry, dict) else str(entry)
+                    messages.append(msg)
+                    if "error" in msg.lower():
+                        errors.append(msg)
+                    elif "warning" in msg.lower() or "warn" in msg.lower():
+                        warnings.append(msg)
+                
+                # Build summary
+                summary_parts = []
+                if errors:
+                    summary_parts.append(f"Found {len(errors)} errors. Latest: {errors[0][:100]}")
+                if warnings:
+                    summary_parts.append(f"{len(warnings)} warnings")
+                if not errors and not warnings:
+                    summary_parts.append(f"{service_name} looks healthy. No errors in recent logs.")
+                
+                return " ".join(summary_parts)
+            else:
+                logger.warning(f"Logs API returned {response.status_code}: {response.text}")
+                status = "running" if service.get("suspended") == "not_suspended" else "suspended"
+                return f"{service_name} is {status}. Couldn't fetch detailed logs via API."
+                
     except Exception as e:
         logger.error(f"Direct API also failed for logs: {e}")
         return f"I couldn't retrieve logs for {service_name}."
