@@ -102,6 +102,7 @@ def get_render_agent_options() -> ClaudeAgentOptions:
     return ClaudeAgentOptions(
         mcp_servers={
             "render": {
+                "type": "http",
                 "url": settings.RENDER_MCP_URL,
                 "headers": {
                     "Authorization": f"Bearer {settings.RENDER_API_KEY}",
