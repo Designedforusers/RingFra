@@ -133,19 +133,31 @@ def get_sdk_options(
     else:
         working_dir = "/app"
     
-    # Get user's Render API key if available (multi-tenant)
+    # Get user's credentials if available (multi-tenant)
     render_api_key = settings.RENDER_API_KEY
+    github_token = settings.GITHUB_TOKEN or ""
+    
     if user_context:
         creds = user_context.get("credentials", {})
+        # Render API key
         render_creds = creds.get("render", {})
         if render_creds.get("api_key"):
             render_api_key = render_creds["api_key"]
+        # GitHub token
+        github_creds = creds.get("github", {})
+        if github_creds.get("access_token"):
+            github_token = github_creds["access_token"]
     
     # Create custom MCP server for proactive tools
+    # Note: Git/GitHub operations are handled via gh CLI in Bash
     proactive_server = create_sdk_mcp_server(
         name="proactive",
         version="1.0.0",
-        tools=[schedule_callback_tool, send_sms_tool, set_reminder_tool],
+        tools=[
+            schedule_callback_tool,
+            send_sms_tool,
+            set_reminder_tool,
+        ],
     )
     
     # Build system prompt
@@ -165,9 +177,18 @@ def get_sdk_options(
         "proactive": proactive_server,
     }
     
+    # Environment variables for tools (gh CLI, git, etc.)
+    env_vars = {}
+    if github_token:
+        env_vars["GH_TOKEN"] = github_token
+        env_vars["GITHUB_TOKEN"] = github_token  # Some tools use this
+    
     return ClaudeAgentOptions(
         # Working directory for file operations
         cwd=working_dir,
+        
+        # Environment variables (GH_TOKEN for gh CLI)
+        env=env_vars,
         
         # System prompt with user context
         system_prompt=system_prompt,
@@ -241,30 +262,47 @@ def _build_system_prompt(user_context: dict | None) -> str:
     base_prompt = """You are an expert on-call engineer accessible via phone. You help users manage their code and infrastructure through voice commands.
 
 ## Your Capabilities
-- **Code**: Read, write, edit files. Run bash commands. Full access to the user's repositories.
-- **Git**: Commit, push, create branches, create PRs.
-- **Infrastructure**: Manage Render services via MCP (deploy, logs, metrics, databases).
+- **Code**: Read, write, edit files. Run ANY bash command. Full shell access.
+- **Git + GitHub CLI**: Full git and `gh` CLI access. Create branches, commits, PRs, merge, review - all via bash.
+- **Infrastructure**: Manage Render services via MCP (deploy, logs, metrics, databases, env vars).
 - **Proactive**: Schedule callbacks ("fix this and call me back"), send SMS updates, set reminders.
 
-## Voice Interaction Guidelines
-- Keep responses concise - they will be spoken aloud
-- Confirm actions before executing destructive operations
-- Provide progress updates during long operations
-- When multiple options exist, ask the user to choose
-- If workspace selection is needed, ask which workspace to use
+## Voice Guidelines
+- Keep responses CONCISE - they're spoken aloud
+- You have FULL AUTONOMY - just do it, don't ask for confirmation
+- Provide brief progress updates on long tasks
 
-## Workflow Patterns
-- "Check the logs" → Use Render MCP to fetch logs, summarize errors
-- "Fix the bug" → Analyze code, make edits, run tests, commit
-- "Deploy it" → Push changes, trigger deploy via Render MCP
-- "Ship it" → Full workflow: test, push, PR, deploy
-- "Call me back when done" → Schedule callback, continue working
+## Git/GitHub Workflow (use gh CLI)
+```bash
+# Create branch and switch
+git checkout -b fix/issue-123
+
+# Make changes, then commit
+git add -A && git commit -m "fix: resolve issue with X"
+
+# Push and create PR in one command
+gh pr create --title "Fix: X" --body "Description" --fill
+
+# Or push first, then create PR
+git push -u origin fix/issue-123
+gh pr create --fill
+
+# Merge PR when ready
+gh pr merge --squash --delete-branch
+```
+
+## Common Patterns
+- "Check the logs" → Render MCP list_logs
+- "Fix the bug" → git checkout -b fix/... → edit → test → gh pr create
+- "Ship it" → git push → gh pr create --fill → gh pr merge
+- "Deploy" → Render MCP trigger deploy
+- "What's using memory?" → Render MCP get_metrics
 
 ## Important
-- You have full autonomy to edit files and run commands
-- Always run tests before pushing if a test command exists
-- Use conventional commits (fix:, feat:, etc.)
-- Create PRs for significant changes
+- FULL AUTONOMY - run commands directly
+- Run tests before pushing: pytest, npm test, go test
+- Use conventional commits: fix:, feat:, refactor:
+- The `gh` CLI is authenticated and ready to use
 """
     
     if not user_context:
