@@ -136,22 +136,26 @@ async def run_render_agent(prompt: str, timeout: float = 30.0) -> str:
     try:
         async def _run_query():
             nonlocal result_text, mcp_connected
+            message_count = 0
             async for message in query(prompt=prompt, options=options):
-                # Log all messages for debugging
+                message_count += 1
+                # Log ALL messages at INFO level for debugging MCP issues
                 if isinstance(message, dict):
                     msg_type = message.get("type")
                     msg_subtype = message.get("subtype")
-                    logger.debug(f"Message: type={msg_type}, subtype={msg_subtype}")
+                    logger.info(f"SDK Message #{message_count}: type={msg_type}, subtype={msg_subtype}, keys={list(message.keys())}")
                 else:
                     msg_type = getattr(message, "type", None)
                     msg_subtype = getattr(message, "subtype", None)
-                    logger.debug(f"Message: type={msg_type}, subtype={msg_subtype}")
+                    logger.info(f"SDK Message #{message_count}: type={msg_type}, subtype={msg_subtype}, class={type(message).__name__}")
                 
                 # Handle dict-style messages
                 if isinstance(message, dict):
                     # Check MCP connection status from system.init
                     if msg_type == "system" and msg_subtype == "init":
+                        logger.info(f"system.init received! Full message: {message}")
                         mcp_servers = message.get("mcp_servers", [])
+                        logger.info(f"MCP servers in init: {mcp_servers}")
                         for server in mcp_servers:
                             name = server.get("name", "")
                             status = server.get("status", "")
@@ -182,7 +186,9 @@ async def run_render_agent(prompt: str, timeout: float = 30.0) -> str:
                 # Handle object-style messages
                 else:
                     if msg_type == "system" and msg_subtype == "init":
+                        logger.info(f"system.init received (object)! message={message}")
                         mcp_servers = getattr(message, "mcp_servers", [])
+                        logger.info(f"MCP servers in init (object): {mcp_servers}")
                         for server in mcp_servers:
                             name = server.get("name") if isinstance(server, dict) else getattr(server, "name", "")
                             status = server.get("status") if isinstance(server, dict) else getattr(server, "status", "")
