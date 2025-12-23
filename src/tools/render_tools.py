@@ -145,10 +145,12 @@ async def run_render_agent(prompt: str) -> str:
 # =============================================================================
 
 async def list_services() -> str:
-    """List all services deployed on Render (via MCP)."""
+    """List all services deployed on Render (MCP with API fallback)."""
     logger.info("Listing Render services")
 
-    prompt = """Use the Render MCP to list all services in the current workspace.
+    # Try MCP first
+    try:
+        prompt = """Use the Render MCP to list all services in the current workspace.
 
 Respond concisely (this will be spoken aloud):
 - How many services are there
@@ -157,19 +159,70 @@ Respond concisely (this will be spoken aloud):
 
 Keep under 100 words."""
 
-    result = await run_render_agent(prompt)
-    return result or "I couldn't retrieve your services."
+        result = await run_render_agent(prompt)
+        if result and len(result) > 20 and "error" not in result.lower():
+            return result
+        logger.warning(f"MCP returned insufficient result: {result}")
+    except Exception as e:
+        logger.warning(f"MCP failed, falling back to direct API: {e}")
+
+    # Fallback to direct API
+    logger.info("Using direct Render API fallback for list_services")
+    try:
+        data = await render_api("GET", "/services")
+        services = data if isinstance(data, list) else data.get("services", data.get("items", []))
+        
+        if not services:
+            return "You don't have any services deployed on Render yet."
+        
+        # Format for voice
+        web_services = []
+        databases = []
+        other = []
+        
+        for svc in services:
+            svc_data = svc.get("service", svc)
+            name = svc_data.get("name", "Unknown")
+            svc_type = svc_data.get("type", "unknown")
+            suspended = svc_data.get("suspended", "not_suspended")
+            
+            status = " (suspended)" if suspended != "not_suspended" else ""
+            
+            if svc_type == "web_service":
+                web_services.append(f"{name}{status}")
+            elif svc_type in ("postgres", "redis"):
+                databases.append(f"{name}{status}")
+            else:
+                other.append(f"{name}{status}")
+        
+        parts = []
+        parts.append(f"You have {len(services)} services on Render.")
+        
+        if web_services:
+            parts.append(f"Web services: {', '.join(web_services)}.")
+        if databases:
+            parts.append(f"Databases: {', '.join(databases)}.")
+        if other:
+            parts.append(f"Other: {', '.join(other)}.")
+        
+        return " ".join(parts)
+        
+    except Exception as e:
+        logger.error(f"Direct API also failed: {e}")
+        return f"I couldn't retrieve your services. Error: {str(e)}"
 
 
 async def get_logs(
     service_name: str, lines: int = 50, filter: str | None = None
 ) -> str:
-    """Get logs for a service (via MCP)."""
+    """Get logs for a service (MCP with API fallback)."""
     logger.info(f"Getting logs for {service_name}")
 
-    filter_instruction = f'Filter for logs containing "{filter}".' if filter else ""
+    # Try MCP first
+    try:
+        filter_instruction = f'Filter for logs containing "{filter}".' if filter else ""
 
-    prompt = f"""Use the Render MCP to get the last {lines} logs for the service named "{service_name}".
+        prompt = f"""Use the Render MCP to get the last {lines} logs for the service named "{service_name}".
 {filter_instruction}
 
 Analyze the logs and respond concisely (this will be spoken aloud):
@@ -179,15 +232,35 @@ Analyze the logs and respond concisely (this will be spoken aloud):
 
 Keep under 75 words."""
 
-    result = await run_render_agent(prompt)
-    return result or f"I couldn't retrieve logs for {service_name}."
+        result = await run_render_agent(prompt)
+        if result and len(result) > 20 and "error" not in result.lower():
+            return result
+        logger.warning(f"MCP returned insufficient result for logs: {result}")
+    except Exception as e:
+        logger.warning(f"MCP failed for logs, falling back to API: {e}")
+
+    # Fallback to direct API
+    logger.info("Using direct Render API fallback for get_logs")
+    try:
+        service = await get_service_by_name(service_name)
+        if not service:
+            return f"I couldn't find a service named '{service_name}'."
+        
+        service_id = service.get("id")
+        # Note: Render API logs endpoint requires different auth, so provide helpful message
+        return f"I found {service_name} but couldn't fetch logs via API. The service is {'running' if service.get('suspended') == 'not_suspended' else 'suspended'}."
+    except Exception as e:
+        logger.error(f"Direct API also failed for logs: {e}")
+        return f"I couldn't retrieve logs for {service_name}."
 
 
 async def get_metrics(service_name: str, period: str = "1h") -> str:
-    """Get performance metrics for a service (via MCP)."""
+    """Get performance metrics for a service (MCP with API fallback)."""
     logger.info(f"Getting metrics for {service_name}")
 
-    prompt = f"""Use the Render MCP to get metrics for the service named "{service_name}" over the last {period}.
+    # Try MCP first
+    try:
+        prompt = f"""Use the Render MCP to get metrics for the service named "{service_name}" over the last {period}.
 
 Report concisely (this will be spoken aloud):
 - CPU usage
@@ -197,8 +270,26 @@ Report concisely (this will be spoken aloud):
 
 Keep under 50 words."""
 
-    result = await run_render_agent(prompt)
-    return result or f"I couldn't retrieve metrics for {service_name}."
+        result = await run_render_agent(prompt)
+        if result and len(result) > 20 and "error" not in result.lower():
+            return result
+        logger.warning(f"MCP returned insufficient result for metrics: {result}")
+    except Exception as e:
+        logger.warning(f"MCP failed for metrics, falling back to API: {e}")
+
+    # Fallback - at least confirm service exists
+    logger.info("Using direct Render API fallback for get_metrics")
+    try:
+        service = await get_service_by_name(service_name)
+        if not service:
+            return f"I couldn't find a service named '{service_name}'."
+        
+        status = "running" if service.get("suspended") == "not_suspended" else "suspended"
+        svc_type = service.get("type", "service")
+        return f"{service_name} is a {svc_type} and is currently {status}. Detailed metrics require the MCP connection."
+    except Exception as e:
+        logger.error(f"Direct API also failed for metrics: {e}")
+        return f"I couldn't retrieve metrics for {service_name}."
 
 
 async def update_env_var(service_name: str, key: str, value: str) -> str:
