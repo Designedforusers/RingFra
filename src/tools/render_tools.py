@@ -337,7 +337,9 @@ async def get_logs(
     try:
         filter_instruction = f'Filter for logs containing "{filter}".' if filter else ""
 
-        prompt = f"""Use the Render MCP to get the last {lines} logs for the service named "{service_name}".
+        prompt = f"""First, check if a workspace is selected using the Render MCP. If no workspace is selected, list workspaces and select the first one.
+
+Then get the last {lines} logs for the service named "{service_name}".
 {filter_instruction}
 
 Analyze the logs and respond concisely (this will be spoken aloud):
@@ -424,7 +426,9 @@ async def get_metrics(service_name: str, period: str = "1h") -> str:
 
     # Try MCP first
     try:
-        prompt = f"""Use the Render MCP to get metrics for the service named "{service_name}" over the last {period}.
+        prompt = f"""First, check if a workspace is selected using the Render MCP. If no workspace is selected, list workspaces and select the first one.
+
+Then get metrics for the service named "{service_name}" over the last {period}.
 
 Report concisely (this will be spoken aloud):
 - CPU usage
