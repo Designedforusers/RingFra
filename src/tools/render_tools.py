@@ -63,8 +63,10 @@ async def get_service_by_name(service_name: str) -> dict | None:
 # =============================================================================
 
 def get_render_agent_options() -> ClaudeAgentOptions:
-    """Get Claude Agent SDK options configured for Render MCP."""
+    """Get Claude Agent SDK options configured for Render MCP.
     
+    Uses HTTP transport with proper authentication headers.
+    """
     def stderr_callback(line: str) -> None:
         """Log stderr from Claude CLI subprocess."""
         logger.warning(f"Claude CLI stderr: {line}")
@@ -73,10 +75,13 @@ def get_render_agent_options() -> ClaudeAgentOptions:
         mcp_servers={
             "render": {
                 "type": "http",
-                "url": "https://mcp.render.com/mcp",
+                "transport": "http",
+                "url": settings.RENDER_MCP_URL,
                 "headers": {
-                    "Authorization": f"Bearer {settings.RENDER_API_KEY}"
-                }
+                    "Authorization": f"Bearer {settings.RENDER_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                "timeout": 30000,  # 30 second timeout
             }
         },
         permission_mode="bypassPermissions",
@@ -84,59 +89,80 @@ def get_render_agent_options() -> ClaudeAgentOptions:
     )
 
 
-async def run_render_agent(prompt: str) -> str:
-    """Run a query against Render MCP via Claude Agent SDK."""
+async def run_render_agent(prompt: str, timeout: float = 30.0) -> str:
+    """Run a query against Render MCP via Claude Agent SDK.
+    
+    Args:
+        prompt: The prompt to send
+        timeout: Maximum time to wait (seconds)
+        
+    Returns:
+        Result text or empty string on failure
+    """
+    import asyncio
+    
     result_text = ""
     options = get_render_agent_options()
     
-    logger.info(f"Starting Claude Agent SDK query...")
+    logger.info("Starting Claude Agent SDK query with Render MCP...")
 
     try:
-        async for message in query(prompt=prompt, options=options):
-            logger.debug(f"Received message type: {type(message)}")
-            if isinstance(message, dict):
-                msg_type = message.get("type")
-                msg_subtype = message.get("subtype")
+        async def _run_query():
+            nonlocal result_text
+            async for message in query(prompt=prompt, options=options):
+                logger.debug(f"Received message type: {type(message)}")
+                if isinstance(message, dict):
+                    msg_type = message.get("type")
+                    msg_subtype = message.get("subtype")
 
-                if msg_type == "assistant":
-                    content = message.get("content")
-                    if content and isinstance(content, list):
-                        for block in content:
-                            if isinstance(block, dict) and block.get("type") == "text":
-                                result_text = block.get("text", "")
+                    if msg_type == "assistant":
+                        content = message.get("content")
+                        if content and isinstance(content, list):
+                            for block in content:
+                                if isinstance(block, dict) and block.get("type") == "text":
+                                    result_text = block.get("text", "")
 
-                elif msg_type == "result":
-                    if msg_subtype == "success":
-                        result = message.get("result")
-                        if result:
-                            result_text = str(result)
-                    elif msg_subtype in ("error", "error_during_execution"):
-                        error = message.get("error")
-                        result_text = f"Error: {error}" if error else "An error occurred"
-            else:
-                msg_type = getattr(message, "type", None)
-                msg_subtype = getattr(message, "subtype", None)
+                    elif msg_type == "result":
+                        if msg_subtype == "success":
+                            result = message.get("result")
+                            if result:
+                                result_text = str(result)
+                        elif msg_subtype in ("error", "error_during_execution"):
+                            error = message.get("error")
+                            result_text = f"Error: {error}" if error else "An error occurred"
+                else:
+                    msg_type = getattr(message, "type", None)
+                    msg_subtype = getattr(message, "subtype", None)
 
-                if msg_type == "assistant":
-                    content = getattr(message, "content", None)
-                    if content and isinstance(content, list):
-                        for block in content:
-                            if hasattr(block, "type") and block.type == "text":
-                                result_text = getattr(block, "text", "")
+                    if msg_type == "assistant":
+                        content = getattr(message, "content", None)
+                        if content and isinstance(content, list):
+                            for block in content:
+                                if hasattr(block, "type") and block.type == "text":
+                                    result_text = getattr(block, "text", "")
 
-                elif msg_type == "result":
-                    if msg_subtype == "success":
-                        result = getattr(message, "result", None)
-                        if result:
-                            result_text = str(result)
+                    elif msg_type == "result":
+                        if msg_subtype == "success":
+                            result = getattr(message, "result", None)
+                            if result:
+                                result_text = str(result)
 
+        # Run with timeout
+        await asyncio.wait_for(_run_query(), timeout=timeout)
+
+    except asyncio.TimeoutError:
+        logger.error(f"Render agent query timed out after {timeout}s")
+        result_text = ""
     except Exception as e:
         import traceback
         logger.error(f"Render agent error: {e}")
         logger.error(f"Traceback: {traceback.format_exc()}")
-        result_text = f"Error: {str(e)}"
+        result_text = ""
 
-    logger.info(f"Claude Agent SDK query completed, result length: {len(result_text)}")
+    if result_text:
+        logger.info(f"Claude Agent SDK query completed, result length: {len(result_text)}")
+    else:
+        logger.warning("Claude Agent SDK query returned empty result")
     return result_text
 
 
