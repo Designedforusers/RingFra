@@ -58,10 +58,28 @@ class SDKBridgeProcessor(FrameProcessor):
     and emits TextFrames from SDK responses for TTS.
     """
     
-    def __init__(self, session: VoiceAgentSession):
+    # Phrases that signal the user wants to end the call
+    GOODBYE_PHRASES = [
+        "bye", "goodbye", "good bye", "see you", "see ya",
+        "talk to you later", "take care", "hang up",
+        "end the call", "end call", "disconnect",
+        "thanks bye", "thank you bye", "thanks goodbye",
+    ]
+    
+    def __init__(self, session: VoiceAgentSession, end_call_callback=None):
         super().__init__()
         self.session = session
         self._processing = False
+        self._end_call_callback = end_call_callback
+    
+    def _is_goodbye(self, text: str) -> bool:
+        """Check if user is saying goodbye."""
+        text_lower = text.lower().strip()
+        # Check exact matches and phrases
+        for phrase in self.GOODBYE_PHRASES:
+            if phrase in text_lower:
+                return True
+        return False
     
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         """Process incoming frames."""
@@ -82,6 +100,17 @@ class SDKBridgeProcessor(FrameProcessor):
     async def _process_user_input(self, text: str):
         """Send user input to SDK and stream response to TTS."""
         logger.info(f"User said: {text}")
+        
+        # Check for goodbye
+        if self._is_goodbye(text):
+            logger.info("User said goodbye - ending call")
+            await self.push_frame(TextFrame(text="Goodbye! Talk to you later."))
+            await self.push_frame(LLMFullResponseEndFrame())
+            # Trigger end of call
+            if self._end_call_callback:
+                await self._end_call_callback()
+            await self.push_frame(EndFrame())
+            return
         
         try:
             async for response_text in self.session.query(text):
