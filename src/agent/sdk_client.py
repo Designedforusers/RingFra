@@ -79,7 +79,7 @@ def _update_task_context(task_ctx: dict) -> None:
 
 
 # Custom tools for proactive features
-@tool("schedule_callback", "Schedule a callback to the user when a task completes", {
+@tool("schedule_callback", "Execute a background task and call back when done. Use for 'fix X and call me back' or 'deploy and let me know'. NOT for simple timed callbacks - use set_reminder for those.", {
     "task_description": str,
     "notify_on": str,  # "success", "failure", "both"
 })
@@ -135,7 +135,7 @@ async def send_sms_tool(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-@tool("set_reminder", "Set a reminder to check on something later", {
+@tool("set_reminder", "Call the user back after a delay. Use for 'call me back in X minutes' or 'remind me in an hour'. This is a TIMED callback - the call happens after the specified delay.", {
     "message": str,
     "delay_minutes": int,
 })
