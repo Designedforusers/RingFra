@@ -38,6 +38,40 @@ from loguru import logger
 from src.config import settings
 
 
+# === Session Context (for tools to access) ===
+# This is set by VoiceAgentSession and accessed by tools
+_session_context: dict = {}
+
+
+def _set_session_context(user_context: dict | None, caller_phone: str | None) -> None:
+    """Set the session context for tools to access."""
+    global _session_context
+    _session_context = {
+        "user_context": user_context or {},
+        "caller_phone": caller_phone,
+        "github_token": settings.GITHUB_TOKEN,
+        "task_context": {},  # Stores worktree info between tool calls
+    }
+    
+    # Override with user-specific credentials if available
+    if user_context:
+        creds = user_context.get("credentials", {})
+        github_creds = creds.get("github", {})
+        if github_creds.get("access_token"):
+            _session_context["github_token"] = github_creds["access_token"]
+
+
+def _get_session_context() -> dict:
+    """Get the current session context."""
+    return _session_context
+
+
+def _update_task_context(task_ctx: dict) -> None:
+    """Update the task context (worktree info, branch, etc.)."""
+    global _session_context
+    _session_context["task_context"] = task_ctx
+
+
 # Custom tools for proactive features
 @tool("schedule_callback", "Schedule a callback to the user when a task completes", {
     "task_description": str,
@@ -67,8 +101,9 @@ async def send_sms_tool(args: dict[str, Any]) -> dict[str, Any]:
     """Send SMS to user."""
     from src.notifications import send_sms
     
-    # Phone is injected by the session manager
-    phone = args.get("_caller_phone")
+    # Get phone from session context
+    ctx = _get_session_context()
+    phone = ctx.get("caller_phone")
     if not phone:
         return {
             "content": [{"type": "text", "text": "No phone number available for SMS"}],
@@ -114,22 +149,24 @@ async def set_reminder_tool(args: dict[str, Any]) -> dict[str, Any]:
 })
 async def setup_repo_for_task_tool(args: dict[str, Any]) -> dict[str, Any]:
     """Set up a repo with isolated worktree for a task."""
-    from src.repos.manager import setup_repo, create_task_worktree, CommitType
+    from src.repos.manager import create_task_worktree, CommitType
     from uuid import uuid4
     
     repo_url = args["repo_url"]
     task_desc = args.get("task_description", "task")
     
-    # Get GitHub token from context or settings
-    github_token = args.get("_github_token") or settings.GITHUB_TOKEN
+    # Get context
+    ctx = _get_session_context()
+    github_token = ctx.get("github_token")
     if not github_token:
         return {
             "content": [{"type": "text", "text": "No GitHub token available"}],
             "is_error": True,
         }
     
-    # Use a generated user_id for single-tenant, or real user_id for multi-tenant
-    user_id = args.get("_user_id") or uuid4()
+    # Use user_id from context or generate one
+    user_context = ctx.get("user_context", {})
+    user_id = user_context.get("user_id") or uuid4()
     
     try:
         # Determine commit type from task description
@@ -151,18 +188,19 @@ async def setup_repo_for_task_tool(args: dict[str, Any]) -> dict[str, Any]:
             commit_type=commit_type,
         )
         
+        # Store task context for later tools (ship_changes, cleanup)
+        _update_task_context({
+            "worktree_path": str(worktree_path),
+            "branch_name": branch_name,
+            "repo_url": repo_url,
+            "user_id": str(user_id),
+        })
+        
         return {
             "content": [{
                 "type": "text",
                 "text": f"Repo ready at {worktree_path} on branch {branch_name}. You can now make changes."
             }],
-            # Store context for later tools
-            "_task_context": {
-                "worktree_path": str(worktree_path),
-                "branch_name": branch_name,
-                "repo_url": repo_url,
-                "user_id": str(user_id),
-            }
         }
     except Exception as e:
         return {
@@ -181,8 +219,9 @@ async def ship_changes_tool(args: dict[str, Any]) -> dict[str, Any]:
     from src.repos.manager import ship_changes, TestStrategy
     from pathlib import Path
     
-    # Get task context
-    task_ctx = args.get("_task_context", {})
+    # Get task context from session
+    ctx = _get_session_context()
+    task_ctx = ctx.get("task_context", {})
     worktree_path = task_ctx.get("worktree_path")
     branch_name = task_ctx.get("branch_name")
     repo_url = task_ctx.get("repo_url")
@@ -193,7 +232,7 @@ async def ship_changes_tool(args: dict[str, Any]) -> dict[str, Any]:
             "is_error": True,
         }
     
-    github_token = args.get("_github_token") or settings.GITHUB_TOKEN
+    github_token = ctx.get("github_token")
     if not github_token:
         return {
             "content": [{"type": "text", "text": "No GitHub token available"}],
@@ -235,7 +274,8 @@ async def cleanup_task_tool(args: dict[str, Any]) -> dict[str, Any]:
     from src.repos.manager import cleanup_worktree
     from pathlib import Path
     
-    task_ctx = args.get("_task_context", {})
+    ctx = _get_session_context()
+    task_ctx = ctx.get("task_context", {})
     worktree_path = task_ctx.get("worktree_path")
     
     if not worktree_path:
@@ -245,6 +285,8 @@ async def cleanup_task_tool(args: dict[str, Any]) -> dict[str, Any]:
     
     try:
         await cleanup_worktree(Path(worktree_path))
+        # Clear task context
+        _update_task_context({})
         return {
             "content": [{"type": "text", "text": "Task cleaned up successfully."}],
         }
@@ -546,6 +588,9 @@ class VoiceAgentSession:
         """Connect to Claude Agent SDK."""
         if self._connected:
             return
+        
+        # Set session context for tools to access
+        _set_session_context(self.user_context, self.caller_phone)
         
         self.client = ClaudeSDKClient(self.options)
         await self.client.connect()
