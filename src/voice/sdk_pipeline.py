@@ -262,7 +262,9 @@ async def run_sdk_pipeline(
             except Exception as e:
                 logger.error(f"Failed to save session memory: {e}")
         
-        await task.cancel()
+        # Don't await task.cancel() - it causes async context issues
+        # The pipeline will clean up naturally when the websocket closes
+        # task.cancel() is called synchronously by the runner
     
     # === Run ===
     runner = PipelineRunner(handle_sigint=False, force_gc=True)
