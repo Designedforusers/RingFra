@@ -56,9 +56,19 @@ async def initiate_callback(
     context_json = json.dumps(context)
     escaped_context = html.escape(context_json)
 
-    # Build TwiML for outbound call
+    # Build immediate greeting based on callback type
+    if callback_type == "reminder":
+        immediate_greeting = "Hey, quick reminder for you."
+    elif callback_type == "alert":
+        immediate_greeting = "Hey, I need to tell you something."
+    else:
+        # task_complete
+        immediate_greeting = "Hey, I've got an update for you."
+    
+    # Build TwiML for outbound call with immediate audio
     twiml = f"""
     <Response>
+        <Say voice="Polly.Matthew">{immediate_greeting}</Say>
         <Connect>
             <Stream url="{ws_url}">
                 <Parameter name="callbackContext" value="{escaped_context}" />
