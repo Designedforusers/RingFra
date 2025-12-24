@@ -255,18 +255,20 @@ async def run_sdk_pipeline(
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info("Client connected - starting SDK session")
-        await session.connect()
         
-        # Mark session as ready so user input can be processed
-        sdk_bridge.mark_session_ready()
-        
-        # Send initial greeting
+        # Send greeting IMMEDIATELY (don't wait for SDK connection)
         if call_type.startswith("outbound_") and callback_context:
             greeting = f"Hi, I'm calling back about {callback_context.get('task_description', 'your task')}."
         else:
             greeting = "Hey, I'm your on-call engineer. What can I help you with?"
         
         await sdk_bridge.push_frame(TextFrame(text=greeting))
+        
+        # Connect SDK in background while greeting plays
+        await session.connect()
+        
+        # Mark session as ready so user input can be processed
+        sdk_bridge.mark_session_ready()
     
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
