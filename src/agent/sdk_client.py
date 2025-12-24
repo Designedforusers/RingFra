@@ -85,11 +85,20 @@ def _update_task_context(task_ctx: dict) -> None:
 })
 async def schedule_callback_tool(args: dict[str, Any]) -> dict[str, Any]:
     """Schedule a callback when async task completes."""
-    from src.tasks.worker import schedule_callback
+    from src.tasks.queue import enqueue_task_with_callback
     
-    task_id = await schedule_callback(
-        task_description=args["task_description"],
-        notify_on=args.get("notify_on", "both"),
+    ctx = _get_session_context()
+    phone = ctx.get("caller_phone")
+    if not phone:
+        return {
+            "content": [{"type": "text", "text": "No phone number available for callback"}],
+            "is_error": True,
+        }
+    
+    task_id = await enqueue_task_with_callback(
+        task_type=args.get("task_description", "task"),
+        params={"notify_on": args.get("notify_on", "both")},
+        phone=phone,
     )
     
     return {
@@ -132,11 +141,21 @@ async def send_sms_tool(args: dict[str, Any]) -> dict[str, Any]:
 })
 async def set_reminder_tool(args: dict[str, Any]) -> dict[str, Any]:
     """Set a reminder that triggers a callback."""
-    from src.tasks.worker import schedule_reminder
+    from src.tasks.queue import enqueue_reminder
     
-    reminder_id = await schedule_reminder(
+    ctx = _get_session_context()
+    phone = ctx.get("caller_phone")
+    if not phone:
+        return {
+            "content": [{"type": "text", "text": "No phone number available for reminder"}],
+            "is_error": True,
+        }
+    
+    delay_seconds = args["delay_minutes"] * 60
+    reminder_id = await enqueue_reminder(
+        phone=phone,
         message=args["message"],
-        delay_minutes=args["delay_minutes"],
+        delay_seconds=delay_seconds,
     )
     
     return {
