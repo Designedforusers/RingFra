@@ -173,6 +173,12 @@ def get_sdk_options(
                 "Authorization": f"Bearer {render_api_key}",
             },
         },
+        # Exa MCP - web search and code context
+        # Tools: web_search_exa, get_code_context_exa
+        "exa": {
+            "type": "http",
+            "url": f"https://mcp.exa.ai/mcp?exaApiKey={settings.EXA_API_KEY}" if settings.EXA_API_KEY else "https://mcp.exa.ai/mcp",
+        },
         # Custom proactive tools
         "proactive": proactive_server,
     }
@@ -242,6 +248,10 @@ def get_sdk_options(
             "mcp__render__get_key_value",
             "mcp__render__create_key_value",
             
+            # MCP - Exa (web search and code context)
+            "mcp__exa__web_search_exa",
+            "mcp__exa__get_code_context_exa",
+            
             # MCP - Proactive (custom tools)
             "mcp__proactive__schedule_callback",
             "mcp__proactive__send_sms",
@@ -265,6 +275,7 @@ def _build_system_prompt(user_context: dict | None) -> str:
 - **Code**: Read, write, edit files. Run ANY bash command. Full shell access.
 - **Git + GitHub CLI**: Full git and `gh` CLI access. Create branches, commits, PRs, merge, review - all via bash.
 - **Infrastructure**: Manage Render services via MCP (deploy, logs, metrics, databases, env vars).
+- **Web Search**: Use Exa MCP for real-time web search (web_search_exa) and code examples (get_code_context_exa).
 - **Proactive**: Schedule callbacks ("fix this and call me back"), send SMS updates, set reminders.
 
 ## Voice Guidelines

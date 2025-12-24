@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     # Render
     RENDER_API_KEY: str
     RENDER_MCP_URL: str = "https://mcp.render.com/mcp"
+    
+    # Exa (web search / code context)
+    EXA_API_KEY: str | None = None
 
     # GitHub
     GITHUB_TOKEN: str  # Default token for single-tenant mode
