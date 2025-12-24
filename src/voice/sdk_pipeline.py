@@ -71,6 +71,11 @@ class SDKBridgeProcessor(FrameProcessor):
         self.session = session
         self._processing = False
         self._end_call_callback = end_call_callback
+        self._session_ready = asyncio.Event()  # Set when SDK session is connected
+    
+    def mark_session_ready(self):
+        """Called when SDK session is connected and ready."""
+        self._session_ready.set()
     
     def _is_goodbye(self, text: str) -> bool:
         """Check if user is saying goodbye."""
@@ -100,6 +105,15 @@ class SDKBridgeProcessor(FrameProcessor):
     async def _process_user_input(self, text: str):
         """Send user input to SDK and stream response to TTS."""
         logger.info(f"User said: {text}")
+        
+        # Wait for session to be ready (max 10 seconds)
+        try:
+            await asyncio.wait_for(self._session_ready.wait(), timeout=10.0)
+        except asyncio.TimeoutError:
+            logger.error("Timeout waiting for SDK session to connect")
+            await self.push_frame(TextFrame(text="I'm still connecting. Please wait a moment."))
+            await self.push_frame(LLMFullResponseEndFrame())
+            return
         
         # Check for goodbye
         if self._is_goodbye(text):
@@ -242,6 +256,9 @@ async def run_sdk_pipeline(
     async def on_client_connected(transport, client):
         logger.info("Client connected - starting SDK session")
         await session.connect()
+        
+        # Mark session as ready so user input can be processed
+        sdk_bridge.mark_session_ready()
         
         # Send initial greeting
         if call_type.startswith("outbound_") and callback_context:
