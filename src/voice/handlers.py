@@ -246,6 +246,7 @@ async def handle_media_stream(websocket: WebSocket):
                 call_type=call_type,
                 callback_context=callback_context,
                 user_context=user_context,
+                caller_phone=caller_phone,
             )
         else:
             if settings.USE_SDK_PIPELINE and not SDK_AVAILABLE:

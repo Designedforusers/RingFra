@@ -135,6 +135,7 @@ async def run_sdk_pipeline(
     call_type: str = "inbound",
     callback_context: dict | None = None,
     user_context: dict | None = None,
+    caller_phone: str | None = None,
 ) -> None:
     """
     Run the voice pipeline with Claude Agent SDK as the brain.
@@ -146,8 +147,9 @@ async def run_sdk_pipeline(
         call_type: "inbound" or "outbound_*"
         callback_context: Context for callback calls
         user_context: User's credentials, repos, memory
+        caller_phone: Phone number of the caller (from Twilio)
     """
-    logger.info(f"Starting SDK pipeline: stream_sid={stream_sid}, call_type={call_type}")
+    logger.info(f"Starting SDK pipeline: stream_sid={stream_sid}, call_type={call_type}, caller_phone={caller_phone}")
     
     # Determine working directory from user's repo
     cwd = None
@@ -156,9 +158,8 @@ async def run_sdk_pipeline(
         if repos and repos[0].get("local_path"):
             cwd = Path(repos[0]["local_path"])
     
-    # Get caller phone for proactive features
-    caller_phone = None
-    if user_context and user_context.get("user"):
+    # Use caller_phone from argument (Twilio), fallback to user_context if available
+    if not caller_phone and user_context and user_context.get("user"):
         caller_phone = user_context["user"].get("phone")
     
     # === Claude Agent SDK Session (persistent for entire call) ===
