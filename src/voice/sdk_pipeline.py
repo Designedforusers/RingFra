@@ -252,15 +252,19 @@ async def run_sdk_pipeline(
     
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
-        logger.info("Client disconnected - cleaning up SDK session")
-        await session.disconnect()
+        logger.info("Client disconnected - compressing and saving session memory")
         
-        # Save session memory if we have user context
+        # Compress conversation and save to database (like /compact)
+        # Must be done before disconnect while session is still active
         if user_context and settings.DATABASE_URL:
             try:
-                await _save_session_memory(session, user_context)
+                summary = await session.compress_and_save_memory()
+                if summary:
+                    logger.info(f"Session memory saved: {summary[:100]}...")
             except Exception as e:
                 logger.error(f"Failed to save session memory: {e}")
+        
+        await session.disconnect()
         
         # Don't await task.cancel() - it causes async context issues
         # The pipeline will clean up naturally when the websocket closes
@@ -269,25 +273,3 @@ async def run_sdk_pipeline(
     # === Run ===
     runner = PipelineRunner(handle_sigint=False, force_gc=True)
     await runner.run(task)
-
-
-async def _save_session_memory(session: VoiceAgentSession, user_context: dict) -> None:
-    """Save conversation summary to session memory."""
-    # The SDK maintains conversation history internally
-    # We can ask it to summarize the conversation
-    try:
-        summary_response = []
-        async for text in session.query(
-            "Summarize our conversation in 2-3 sentences for future context. "
-            "Include what was worked on, actions taken, and anything left incomplete."
-        ):
-            summary_response.append(text)
-        
-        summary = " ".join(summary_response)
-        
-        if summary:
-            from src.db.memory import update_session_memory
-            await update_session_memory(user_context["user_id"], summary=summary)
-            logger.info(f"Saved session memory: {summary[:100]}...")
-    except Exception as e:
-        logger.error(f"Failed to generate session summary: {e}")

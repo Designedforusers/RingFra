@@ -666,6 +666,65 @@ class VoiceAgentSession:
         if self.client and self._connected:
             await self.client.interrupt()
             logger.info("VoiceAgentSession interrupted")
+    
+    async def compress_and_save_memory(self) -> str | None:
+        """
+        Compress the conversation and save to database (like /compact).
+        
+        Call this before disconnecting to persist memory across sessions.
+        Uses the same Claude session to generate the summary, ensuring
+        full context awareness.
+        
+        Returns:
+            The compressed summary, or None if compression failed
+        """
+        if not self.client or not self._connected:
+            logger.warning("Cannot compress - session not connected")
+            return None
+        
+        # Get user_id from context
+        user_id = None
+        if self.user_context:
+            user_id = self.user_context.get("user_id")
+        
+        if not user_id:
+            logger.debug("No user_id - skipping memory save (anonymous session)")
+            return None
+        
+        logger.info("Compressing conversation for memory persistence...")
+        
+        # Ask Claude to summarize (uses full conversation context)
+        compress_prompt = """Summarize our conversation concisely for future reference. Include:
+1. What tasks were completed and their outcomes
+2. What's still pending or needs follow-up
+3. Key technical decisions made
+4. Any user preferences or patterns you noticed (e.g., coding style, preferred tools)
+
+Keep it under 200 words. Be specific about file names, PR numbers, and error messages."""
+        
+        try:
+            await self.client.query(compress_prompt)
+            
+            summary = ""
+            async for message in self.client.receive_response():
+                if isinstance(message, AssistantMessage):
+                    for block in message.content:
+                        if isinstance(block, TextBlock):
+                            summary = block.text.strip()
+            
+            if summary:
+                # Save to database
+                from src.db.memory import update_session_memory
+                await update_session_memory(user_id, summary=summary)
+                logger.info(f"Session memory saved ({len(summary)} chars)")
+                return summary
+            else:
+                logger.warning("Compression produced empty summary")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Failed to compress session: {e}")
+            return None
 
 
 # Convenience function for simple one-off queries (testing)
