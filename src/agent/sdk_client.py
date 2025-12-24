@@ -39,14 +39,16 @@ from src.config import settings
 
 
 # === Session Context (for tools to access) ===
-# This is set by VoiceAgentSession and accessed by tools
-_session_context: dict = {}
+# Uses contextvars for async-safe, per-task isolation.
+# This allows multiple concurrent calls without context bleeding.
+from contextvars import ContextVar
+
+_session_context_var: ContextVar[dict] = ContextVar('session_context', default={})
 
 
 def _set_session_context(user_context: dict | None, caller_phone: str | None) -> None:
-    """Set the session context for tools to access."""
-    global _session_context
-    _session_context = {
+    """Set the session context for tools to access (async-safe)."""
+    ctx = {
         "user_context": user_context or {},
         "caller_phone": caller_phone,
         "github_token": settings.GITHUB_TOKEN,
@@ -58,18 +60,22 @@ def _set_session_context(user_context: dict | None, caller_phone: str | None) ->
         creds = user_context.get("credentials", {})
         github_creds = creds.get("github", {})
         if github_creds.get("access_token"):
-            _session_context["github_token"] = github_creds["access_token"]
+            ctx["github_token"] = github_creds["access_token"]
+    
+    _session_context_var.set(ctx)
 
 
 def _get_session_context() -> dict:
-    """Get the current session context."""
-    return _session_context
+    """Get the current session context (async-safe)."""
+    return _session_context_var.get()
 
 
 def _update_task_context(task_ctx: dict) -> None:
     """Update the task context (worktree info, branch, etc.)."""
-    global _session_context
-    _session_context["task_context"] = task_ctx
+    ctx = _session_context_var.get()
+    if ctx:
+        ctx["task_context"] = task_ctx
+        _session_context_var.set(ctx)
 
 
 # Custom tools for proactive features

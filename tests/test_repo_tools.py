@@ -63,6 +63,37 @@ class TestSessionContext:
         assert ctx["task_context"] == task_ctx
 
 
+class TestConcurrentSessionIsolation:
+    """Test that concurrent sessions don't interfere with each other."""
+    
+    @pytest.mark.asyncio
+    async def test_concurrent_contexts_isolated(self):
+        """Test that two concurrent tasks have isolated contexts."""
+        import asyncio
+        from src.agent.sdk_client import _set_session_context, _get_session_context
+        
+        results = {}
+        
+        async def task_a():
+            _set_session_context({"user_id": "user-A"}, "+1111111111")
+            await asyncio.sleep(0.1)  # Simulate async work
+            ctx = _get_session_context()
+            results["a"] = ctx.get("caller_phone")
+        
+        async def task_b():
+            _set_session_context({"user_id": "user-B"}, "+2222222222")
+            await asyncio.sleep(0.05)  # Finish before task_a
+            ctx = _get_session_context()
+            results["b"] = ctx.get("caller_phone")
+        
+        # Run concurrently
+        await asyncio.gather(task_a(), task_b())
+        
+        # Each task should see its own context
+        assert results["a"] == "+1111111111"
+        assert results["b"] == "+2222222222"
+
+
 class TestMultiTenantFlag:
     """Test MULTI_TENANT config flag behavior."""
     
