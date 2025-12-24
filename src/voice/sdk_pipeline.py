@@ -70,10 +70,22 @@ class SDKBridgeProcessor(FrameProcessor):
     
     # Context-aware filler phrases to eliminate awkward silence
     THINKING_FILLERS = {
-        "lookup": ["Let me check that...", "Looking into it...", "One sec...", "Pulling that up..."],
-        "action": ["On it...", "Working on that now...", "Let me do that...", "Sure thing..."],
-        "complex": ["Hmm, let me think...", "Good question...", "Let me figure this out..."],
-        "default": ["Let me see...", "One moment...", "Sure...", "Okay..."],
+        "lookup": [
+            "Let me check that...", "Looking into it...", "One sec...", "Pulling that up...",
+            "Checking now...", "Let me see what's going on...", "Looking at that...",
+        ],
+        "action": [
+            "On it...", "Working on that now...", "Let me do that...", "Sure thing...",
+            "Doing that now...", "Got it, working on it...", "Alright, let me handle that...",
+        ],
+        "complex": [
+            "Hmm, let me think...", "Good question...", "Let me figure this out...",
+            "That's interesting, let me dig into it...", "Let me work through that...",
+        ],
+        "default": [
+            "Let me see...", "One moment...", "Sure...", "Okay...",
+            "Alright...", "Got it...", "Let me look...",
+        ],
     }
     
     # Streaming fillers for long operations (10+ seconds)
@@ -83,6 +95,10 @@ class SDKBridgeProcessor(FrameProcessor):
         "Bear with me...",
         "This is taking a bit longer...",
         "Still on it...",
+        "Hang tight...",
+        "Just a little longer...",
+        "Making progress...",
+        "Working through it...",
     ]
     
     def __init__(self, session: VoiceAgentSession, end_call_callback=None, is_callback: bool = False):
@@ -126,9 +142,12 @@ class SDKBridgeProcessor(FrameProcessor):
         """Send periodic fillers for operations taking 10+ seconds."""
         try:
             await asyncio.sleep(10)  # Wait 10 seconds before first long-op filler
+            # Shuffle to add variety across calls
+            fillers = self.LONG_OPERATION_FILLERS.copy()
+            random.shuffle(fillers)
             filler_index = 0
             while True:
-                filler = self.LONG_OPERATION_FILLERS[filler_index % len(self.LONG_OPERATION_FILLERS)]
+                filler = fillers[filler_index % len(fillers)]
                 await self.push_frame(TextFrame(text=filler))
                 logger.debug(f"Sent long-op filler: {filler}")
                 filler_index += 1

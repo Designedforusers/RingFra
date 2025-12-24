@@ -85,7 +85,8 @@ def _update_task_context(task_ctx: dict) -> None:
 })
 async def schedule_callback_tool(args: dict[str, Any]) -> dict[str, Any]:
     """Schedule a callback when async task completes."""
-    from src.tasks.queue import enqueue_task_with_callback
+    from src.tasks.queue import enqueue_task_with_callback, RedisUnavailableError
+    from src.callbacks.outbound import send_sms
     
     ctx = _get_session_context()
     phone = ctx.get("caller_phone")
@@ -95,18 +96,28 @@ async def schedule_callback_tool(args: dict[str, Any]) -> dict[str, Any]:
             "is_error": True,
         }
     
-    task_id = await enqueue_task_with_callback(
-        task_type=args.get("task_description", "task"),
-        params={"notify_on": args.get("notify_on", "both")},
-        phone=phone,
-    )
-    
-    return {
-        "content": [{
-            "type": "text",
-            "text": f"Callback scheduled. I'll call you back when the task is done. Task ID: {task_id}"
-        }]
-    }
+    try:
+        task_id = await enqueue_task_with_callback(
+            task_type=args.get("task_description", "task"),
+            params={"notify_on": args.get("notify_on", "both")},
+            phone=phone,
+        )
+        return {
+            "content": [{
+                "type": "text",
+                "text": f"Callback scheduled. I'll call you back when the task is done. Task ID: {task_id}"
+            }]
+        }
+    except RedisUnavailableError:
+        # Graceful degradation: notify user via SMS
+        await send_sms(phone, f"[PhoneFix] Sorry, I couldn't schedule your callback for '{args.get('task_description', 'task')}'. The background service is temporarily unavailable. Please try again later or call back.")
+        return {
+            "content": [{
+                "type": "text",
+                "text": "I couldn't schedule the callback right now - the background service is temporarily unavailable. I've sent you an SMS to let you know. Please try again in a few minutes."
+            }],
+            "is_error": True,
+        }
 
 
 @tool("send_sms", "Send an SMS notification to the user", {
@@ -141,7 +152,8 @@ async def send_sms_tool(args: dict[str, Any]) -> dict[str, Any]:
 })
 async def set_reminder_tool(args: dict[str, Any]) -> dict[str, Any]:
     """Set a reminder that triggers a callback."""
-    from src.tasks.queue import enqueue_reminder
+    from src.tasks.queue import enqueue_reminder, RedisUnavailableError
+    from src.callbacks.outbound import send_sms
     
     ctx = _get_session_context()
     phone = ctx.get("caller_phone")
@@ -152,18 +164,29 @@ async def set_reminder_tool(args: dict[str, Any]) -> dict[str, Any]:
         }
     
     delay_seconds = args["delay_minutes"] * 60
-    reminder_id = await enqueue_reminder(
-        phone=phone,
-        message=args["message"],
-        delay_seconds=delay_seconds,
-    )
     
-    return {
-        "content": [{
-            "type": "text",
-            "text": f"Reminder set for {args['delay_minutes']} minutes from now."
-        }]
-    }
+    try:
+        reminder_id = await enqueue_reminder(
+            phone=phone,
+            message=args["message"],
+            delay_seconds=delay_seconds,
+        )
+        return {
+            "content": [{
+                "type": "text",
+                "text": f"Reminder set for {args['delay_minutes']} minutes from now."
+            }]
+        }
+    except RedisUnavailableError:
+        # Graceful degradation: notify user via SMS
+        await send_sms(phone, f"[PhoneFix] Sorry, I couldn't set your reminder for {args['delay_minutes']} minutes. The background service is temporarily unavailable. Please set a manual reminder or call back later.")
+        return {
+            "content": [{
+                "type": "text",
+                "text": f"I couldn't set the reminder right now - the background service is temporarily unavailable. I've sent you an SMS about it. Please try again in a few minutes."
+            }],
+            "is_error": True,
+        }
 
 
 # === Repo Management Tools (Production mode only) ===

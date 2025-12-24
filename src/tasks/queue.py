@@ -16,14 +16,23 @@ from src.config import settings
 _pool: ArqRedis | None = None
 
 
+class RedisUnavailableError(Exception):
+    """Raised when Redis is not configured or unavailable."""
+    pass
+
+
 async def get_redis_pool() -> ArqRedis:
     """Get or create the Redis connection pool."""
     global _pool
     if _pool is None:
         if not settings.REDIS_URL:
-            raise ValueError("REDIS_URL not configured - proactive features disabled")
-        _pool = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
-        logger.info("Redis pool created")
+            raise RedisUnavailableError("REDIS_URL not configured - proactive features disabled")
+        try:
+            _pool = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
+            logger.info("Redis pool created")
+        except Exception as e:
+            logger.error(f"Failed to connect to Redis: {e}")
+            raise RedisUnavailableError(f"Redis connection failed: {e}")
     return _pool
 
 
