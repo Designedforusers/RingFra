@@ -21,6 +21,7 @@ Architecture:
 """
 
 import asyncio
+import random
 from pathlib import Path
 
 from fastapi import WebSocket
@@ -66,6 +67,14 @@ class SDKBridgeProcessor(FrameProcessor):
         "thanks bye", "thank you bye", "thanks goodbye",
     ]
     
+    # Context-aware filler phrases to eliminate awkward silence
+    THINKING_FILLERS = {
+        "lookup": ["Let me check that...", "Looking into it...", "One sec...", "Pulling that up..."],
+        "action": ["On it...", "Working on that now...", "Let me do that...", "Sure thing..."],
+        "complex": ["Hmm, let me think...", "Good question...", "Let me figure this out..."],
+        "default": ["Let me see...", "One moment...", "Sure...", "Okay..."],
+    }
+    
     def __init__(self, session: VoiceAgentSession, end_call_callback=None):
         super().__init__()
         self.session = session
@@ -85,6 +94,21 @@ class SDKBridgeProcessor(FrameProcessor):
             if phrase in text_lower:
                 return True
         return False
+    
+    def _get_contextual_filler(self, text: str) -> str:
+        """Pick a filler phrase based on the type of query."""
+        text_lower = text.lower()
+        
+        if any(w in text_lower for w in ["check", "look", "what", "show", "status", "logs", "metrics"]):
+            category = "lookup"
+        elif any(w in text_lower for w in ["fix", "deploy", "run", "create", "delete", "scale", "restart"]):
+            category = "action"
+        elif any(w in text_lower for w in ["why", "how", "explain", "help me understand", "what do you think"]):
+            category = "complex"
+        else:
+            category = "default"
+        
+        return random.choice(self.THINKING_FILLERS[category])
     
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         """Process incoming frames."""
@@ -106,16 +130,7 @@ class SDKBridgeProcessor(FrameProcessor):
         """Send user input to SDK and stream response to TTS."""
         logger.info(f"User said: {text}")
         
-        # Wait for session to be ready (max 10 seconds)
-        try:
-            await asyncio.wait_for(self._session_ready.wait(), timeout=10.0)
-        except asyncio.TimeoutError:
-            logger.error("Timeout waiting for SDK session to connect")
-            await self.push_frame(TextFrame(text="I'm still connecting. Please wait a moment."))
-            await self.push_frame(LLMFullResponseEndFrame())
-            return
-        
-        # Check for goodbye
+        # Check for goodbye first (no filler needed)
         if self._is_goodbye(text):
             logger.info("User said goodbye - ending call")
             await self.push_frame(TextFrame(text="Goodbye! Talk to you later."))
@@ -124,6 +139,20 @@ class SDKBridgeProcessor(FrameProcessor):
             if self._end_call_callback:
                 await self._end_call_callback()
             await self.push_frame(EndFrame())
+            return
+        
+        # Send filler IMMEDIATELY to eliminate awkward silence
+        filler = self._get_contextual_filler(text)
+        await self.push_frame(TextFrame(text=filler))
+        logger.debug(f"Sent filler: {filler}")
+        
+        # Wait for session to be ready (max 10 seconds)
+        try:
+            await asyncio.wait_for(self._session_ready.wait(), timeout=10.0)
+        except asyncio.TimeoutError:
+            logger.error("Timeout waiting for SDK session to connect")
+            await self.push_frame(TextFrame(text="I'm having trouble connecting. Let me try again."))
+            await self.push_frame(LLMFullResponseEndFrame())
             return
         
         try:
@@ -138,7 +167,7 @@ class SDKBridgeProcessor(FrameProcessor):
             
         except Exception as e:
             logger.error(f"SDK query error: {e}")
-            await self.push_frame(TextFrame(text="I encountered an error. Please try again."))
+            await self.push_frame(TextFrame(text="I ran into an issue. Can you try that again?"))
             await self.push_frame(LLMFullResponseEndFrame())
 
 
