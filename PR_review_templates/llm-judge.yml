@@ -1,0 +1,92 @@
+# Claude LLM-as-Judge Mode
+# Structured PR evaluation with scoring rubric
+#
+# Outputs: Score table (X/25), verdict, required changes
+
+name: Claude PR Judge
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to evaluate'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  judge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 20
+
+      - name: Claude Code Action
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            You are a code review judge. Evaluate this PR using the following rubric:
+            
+            ## Evaluation Criteria (score 1-5 for each)
+            
+            ### 1. Code Quality
+            - Clean, readable code
+            - Follows project conventions
+            - No code smells
+            
+            ### 2. Correctness
+            - Logic is sound
+            - Edge cases handled
+            - No obvious bugs
+            
+            ### 3. Security
+            - No vulnerabilities introduced
+            - Proper input validation
+            - No secrets exposed
+            
+            ### 4. Performance
+            - Efficient algorithms
+            - No unnecessary operations
+            - Proper resource management
+            
+            ### 5. Testing
+            - Adequate test coverage
+            - Tests are meaningful
+            - Edge cases tested
+            
+            ## Output Format
+            
+            Provide your evaluation as:
+            
+            ```
+            ## PR Evaluation
+            
+            | Criteria | Score | Notes |
+            |----------|-------|-------|
+            | Code Quality | X/5 | ... |
+            | Correctness | X/5 | ... |
+            | Security | X/5 | ... |
+            | Performance | X/5 | ... |
+            | Testing | X/5 | ... |
+            
+            **Overall Score: X/25**
+            
+            ### Verdict: [APPROVE / REQUEST_CHANGES / NEEDS_DISCUSSION]
+            
+            ### Summary
+            [2-3 sentence summary]
+            
+            ### Required Changes (if any)
+            - ...
+            ```
+          claude_args: "--max-turns 3 --model claude-sonnet-4-5-20250929"

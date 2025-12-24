@@ -1,0 +1,41 @@
+# Claude Auto Review Mode
+# Automatically reviews every PR on open/sync
+#
+# Checks for: code quality, bugs, security, performance, test coverage
+
+name: Claude PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 20
+
+      - name: Claude Code Action
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Review this PR for:
+            1. Code quality and best practices
+            2. Potential bugs or edge cases
+            3. Security vulnerabilities
+            4. Performance issues
+            5. Test coverage gaps
+            
+            Be concise but thorough. Approve if changes look good,
+            request changes if there are issues.
+          claude_args: "--max-turns 5"
