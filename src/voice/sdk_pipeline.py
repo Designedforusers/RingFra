@@ -33,6 +33,7 @@ from pipecat.frames.frames import (
     TranscriptionFrame,
     EndFrame,
     LLMFullResponseEndFrame,
+    StartInterruptionFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
@@ -75,12 +76,23 @@ class SDKBridgeProcessor(FrameProcessor):
         "default": ["Let me see...", "One moment...", "Sure...", "Okay..."],
     }
     
-    def __init__(self, session: VoiceAgentSession, end_call_callback=None):
+    # Streaming fillers for long operations (10+ seconds)
+    LONG_OPERATION_FILLERS = [
+        "Still working on it...",
+        "Almost there...",
+        "Bear with me...",
+        "This is taking a bit longer...",
+        "Still on it...",
+    ]
+    
+    def __init__(self, session: VoiceAgentSession, end_call_callback=None, is_callback: bool = False):
         super().__init__()
         self.session = session
         self._processing = False
         self._end_call_callback = end_call_callback
         self._session_ready = asyncio.Event()  # Set when SDK session is connected
+        self._is_callback = is_callback  # Skip greeting for callbacks (Twilio already greeted)
+        self._long_op_task: asyncio.Task | None = None  # For streaming fillers
     
     def mark_session_ready(self):
         """Called when SDK session is connected and ready."""
@@ -109,6 +121,26 @@ class SDKBridgeProcessor(FrameProcessor):
             category = "default"
         
         return random.choice(self.THINKING_FILLERS[category])
+    
+    async def _stream_long_operation_fillers(self):
+        """Send periodic fillers for operations taking 10+ seconds."""
+        try:
+            await asyncio.sleep(10)  # Wait 10 seconds before first long-op filler
+            filler_index = 0
+            while True:
+                filler = self.LONG_OPERATION_FILLERS[filler_index % len(self.LONG_OPERATION_FILLERS)]
+                await self.push_frame(TextFrame(text=filler))
+                logger.debug(f"Sent long-op filler: {filler}")
+                filler_index += 1
+                await asyncio.sleep(8)  # Every 8 seconds after that
+        except asyncio.CancelledError:
+            pass  # Task cancelled when SDK responds
+    
+    def _cancel_long_op_filler(self):
+        """Cancel the long operation filler task."""
+        if self._long_op_task and not self._long_op_task.done():
+            self._long_op_task.cancel()
+            self._long_op_task = None
     
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         """Process incoming frames."""
@@ -146,18 +178,29 @@ class SDKBridgeProcessor(FrameProcessor):
         await self.push_frame(TextFrame(text=filler))
         logger.debug(f"Sent filler: {filler}")
         
+        # Start long-operation filler task (will send more fillers after 10s)
+        self._long_op_task = asyncio.create_task(self._stream_long_operation_fillers())
+        
         # Wait for session to be ready (max 10 seconds)
         try:
             await asyncio.wait_for(self._session_ready.wait(), timeout=10.0)
         except asyncio.TimeoutError:
+            self._cancel_long_op_filler()
             logger.error("Timeout waiting for SDK session to connect")
             await self.push_frame(TextFrame(text="I'm having trouble connecting. Let me try again."))
             await self.push_frame(LLMFullResponseEndFrame())
             return
         
         try:
+            first_response = True
             async for response_text in self.session.query(text):
                 if response_text:
+                    # On first SDK response, cancel fillers and interrupt any playing TTS
+                    if first_response:
+                        self._cancel_long_op_filler()
+                        await self.push_frame(StartInterruptionFrame())
+                        first_response = False
+                    
                     # Send TextFrame to TTS - Pipecat will handle conversion
                     await self.push_frame(TextFrame(text=response_text))
                     logger.debug(f"SDK response chunk: {response_text[:50]}...")
@@ -166,6 +209,7 @@ class SDKBridgeProcessor(FrameProcessor):
             await self.push_frame(LLMFullResponseEndFrame())
             
         except Exception as e:
+            self._cancel_long_op_filler()
             logger.error(f"SDK query error: {e}")
             await self.push_frame(TextFrame(text="I ran into an issue. Can you try that again?"))
             await self.push_frame(LLMFullResponseEndFrame())
@@ -251,7 +295,8 @@ async def run_sdk_pipeline(
     )
     
     # === SDK Bridge (connects Pipecat to Claude Agent SDK) ===
-    sdk_bridge = SDKBridgeProcessor(session=session)
+    is_callback = call_type.startswith("outbound_")
+    sdk_bridge = SDKBridgeProcessor(session=session, is_callback=is_callback)
     
     # === Pipeline ===
     # SDK bridge outputs TextFrames which TTS converts to audio
@@ -285,26 +330,28 @@ async def run_sdk_pipeline(
     async def on_client_connected(transport, client):
         logger.info("Client connected - starting SDK session")
         
-        # Send greeting IMMEDIATELY (don't wait for SDK connection)
+        # For callbacks: Twilio already said "Hey, I've got an update" - just give the details
+        # For inbound: Full greeting needed
         if call_type.startswith("outbound_") and callback_context:
-            # Build informative callback greeting
-            task = callback_context.get('task_description') or callback_context.get('task_type') or 'your request'
+            # Callback - Twilio already greeted, just give the substance
+            cb_task = callback_context.get('task_description') or callback_context.get('task_type') or 'your request'
             status = callback_context.get('status', 'completed')
             summary = callback_context.get('summary', '')
             
             if status == 'completed' and callback_context.get('success', True):
                 if summary:
-                    greeting = f"Hey, good news! {summary}"
+                    greeting = summary  # Just the summary, no "Hey good news"
                 else:
-                    greeting = f"Hey, I finished {task}. Everything went smoothly."
+                    greeting = f"I finished {cb_task}. Everything went smoothly."
             elif status == 'failed' or not callback_context.get('success', True):
-                greeting = f"Hey, I ran into an issue with {task}. {summary}" if summary else f"Hey, I ran into an issue with {task}."
+                greeting = f"I ran into an issue with {cb_task}. {summary}" if summary else f"I ran into an issue with {cb_task}."
             elif call_type == "outbound_reminder":
-                message = callback_context.get('reminder') or callback_context.get('message') or task
-                greeting = f"Hey, just a reminder: {message}"
+                message = callback_context.get('reminder') or callback_context.get('message') or cb_task
+                greeting = message  # Just the reminder message
             else:
-                greeting = f"Hey, calling about {task}. {summary}" if summary else f"Hey, calling back about {task}."
+                greeting = f"{summary}" if summary else f"It's about {cb_task}."
         else:
+            # Inbound call - full greeting
             greeting = "Hey, what's up?"
         
         await sdk_bridge.push_frame(TextFrame(text=greeting))
