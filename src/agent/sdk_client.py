@@ -106,6 +106,154 @@ async def set_reminder_tool(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# === Repo Management Tools (Production mode only) ===
+
+@tool("setup_repo_for_task", "Clone a repo and create an isolated worktree for a task. Use this before making code changes.", {
+    "repo_url": str,  # GitHub repo URL (can get from Render service)
+    "task_description": str,  # Brief description like "fix auth bug"
+})
+async def setup_repo_for_task_tool(args: dict[str, Any]) -> dict[str, Any]:
+    """Set up a repo with isolated worktree for a task."""
+    from src.repos.manager import setup_repo, create_task_worktree, CommitType
+    from uuid import uuid4
+    
+    repo_url = args["repo_url"]
+    task_desc = args.get("task_description", "task")
+    
+    # Get GitHub token from context or settings
+    github_token = args.get("_github_token") or settings.GITHUB_TOKEN
+    if not github_token:
+        return {
+            "content": [{"type": "text", "text": "No GitHub token available"}],
+            "is_error": True,
+        }
+    
+    # Use a generated user_id for single-tenant, or real user_id for multi-tenant
+    user_id = args.get("_user_id") or uuid4()
+    
+    try:
+        # Determine commit type from task description
+        desc_lower = task_desc.lower()
+        if "fix" in desc_lower or "bug" in desc_lower:
+            commit_type = CommitType.FIX
+        elif "feature" in desc_lower or "add" in desc_lower:
+            commit_type = CommitType.FEAT
+        elif "refactor" in desc_lower:
+            commit_type = CommitType.REFACTOR
+        else:
+            commit_type = CommitType.FIX
+        
+        # Create worktree
+        worktree_path, branch_name = await create_task_worktree(
+            user_id=user_id,
+            repo_url=repo_url,
+            github_token=github_token,
+            commit_type=commit_type,
+        )
+        
+        return {
+            "content": [{
+                "type": "text",
+                "text": f"Repo ready at {worktree_path} on branch {branch_name}. You can now make changes."
+            }],
+            # Store context for later tools
+            "_task_context": {
+                "worktree_path": str(worktree_path),
+                "branch_name": branch_name,
+                "repo_url": repo_url,
+                "user_id": str(user_id),
+            }
+        }
+    except Exception as e:
+        return {
+            "content": [{"type": "text", "text": f"Failed to set up repo: {e}"}],
+            "is_error": True,
+        }
+
+
+@tool("ship_changes", "Push changes and create a PR. Use after making code changes.", {
+    "title": str,  # PR title
+    "description": str,  # PR description (optional)
+    "run_tests": bool,  # Whether to run tests first (default: True)
+})
+async def ship_changes_tool(args: dict[str, Any]) -> dict[str, Any]:
+    """Ship changes: commit, push, create PR."""
+    from src.repos.manager import ship_changes, TestStrategy
+    from pathlib import Path
+    
+    # Get task context
+    task_ctx = args.get("_task_context", {})
+    worktree_path = task_ctx.get("worktree_path")
+    branch_name = task_ctx.get("branch_name")
+    repo_url = task_ctx.get("repo_url")
+    
+    if not all([worktree_path, branch_name, repo_url]):
+        return {
+            "content": [{"type": "text", "text": "No active task. Use setup_repo_for_task first."}],
+            "is_error": True,
+        }
+    
+    github_token = args.get("_github_token") or settings.GITHUB_TOKEN
+    if not github_token:
+        return {
+            "content": [{"type": "text", "text": "No GitHub token available"}],
+            "is_error": True,
+        }
+    
+    test_strategy = TestStrategy.LOCAL if args.get("run_tests", True) else TestStrategy.NONE
+    
+    try:
+        result = await ship_changes(
+            worktree_path=Path(worktree_path),
+            repo_url=repo_url,
+            branch_name=branch_name,
+            github_token=github_token,
+            title=args["title"],
+            description=args.get("description", ""),
+            test_strategy=test_strategy,
+        )
+        
+        if result.success:
+            return {
+                "content": [{"type": "text", "text": result.message}],
+            }
+        else:
+            return {
+                "content": [{"type": "text", "text": f"Ship failed: {result.message}"}],
+                "is_error": True,
+            }
+    except Exception as e:
+        return {
+            "content": [{"type": "text", "text": f"Failed to ship: {e}"}],
+            "is_error": True,
+        }
+
+
+@tool("cleanup_task", "Clean up worktree after task is complete.", {})
+async def cleanup_task_tool(args: dict[str, Any]) -> dict[str, Any]:
+    """Clean up worktree after task completion."""
+    from src.repos.manager import cleanup_worktree
+    from pathlib import Path
+    
+    task_ctx = args.get("_task_context", {})
+    worktree_path = task_ctx.get("worktree_path")
+    
+    if not worktree_path:
+        return {
+            "content": [{"type": "text", "text": "No active task to clean up."}],
+        }
+    
+    try:
+        await cleanup_worktree(Path(worktree_path))
+        return {
+            "content": [{"type": "text", "text": "Task cleaned up successfully."}],
+        }
+    except Exception as e:
+        return {
+            "content": [{"type": "text", "text": f"Cleanup warning: {e}"}],
+        }
+
+
 def get_sdk_options(
     user_context: dict | None = None,
     cwd: Path | None = None,
@@ -149,15 +297,24 @@ def get_sdk_options(
             github_token = github_creds["access_token"]
     
     # Create custom MCP server for proactive tools
-    # Note: Git/GitHub operations are handled via gh CLI in Bash
+    proactive_tools = [
+        schedule_callback_tool,
+        send_sms_tool,
+        set_reminder_tool,
+    ]
+    
+    # Add repo management tools in multi-tenant (production) mode
+    if settings.MULTI_TENANT:
+        proactive_tools.extend([
+            setup_repo_for_task_tool,
+            ship_changes_tool,
+            cleanup_task_tool,
+        ])
+    
     proactive_server = create_sdk_mcp_server(
         name="proactive",
         version="1.0.0",
-        tools=[
-            schedule_callback_tool,
-            send_sms_tool,
-            set_reminder_tool,
-        ],
+        tools=proactive_tools,
     )
     
     # Build system prompt
@@ -256,7 +413,14 @@ def get_sdk_options(
             "mcp__proactive__schedule_callback",
             "mcp__proactive__send_sms",
             "mcp__proactive__set_reminder",
-        ],
+        ] + (
+            # Repo management tools (production mode only)
+            [
+                "mcp__proactive__setup_repo_for_task",
+                "mcp__proactive__ship_changes",
+                "mcp__proactive__cleanup_task",
+            ] if settings.MULTI_TENANT else []
+        ),
         
         # Enable partial message streaming for TTS
         include_partial_messages=True,

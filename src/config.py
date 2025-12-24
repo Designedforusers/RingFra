@@ -57,6 +57,11 @@ class Settings(BaseSettings):
     STT_MODEL: str = "nova-3"
     TTS_VOICE: str = "228fca29-3a0a-435c-8728-5cb483251068"  # Cartesia "Kiefer" - stable male voice for agents
     USE_SDK_PIPELINE: bool = True  # Use Claude Agent SDK (True) or Pipecat LLM (False)
+    
+    # Multi-tenant mode
+    # False = Demo mode (single user, agent uses gh/git directly via Bash)
+    # True = Production mode (multi-user, managed worktrees, state in DB)
+    MULTI_TENANT: bool = False
 
     # Observability
     SENTRY_DSN: str | None = None  # Optional: Sentry error tracking
