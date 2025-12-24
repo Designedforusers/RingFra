@@ -53,17 +53,24 @@ async def lifespan(app: FastAPI):
             import asyncio
             from arq import create_pool
             from arq.connections import RedisSettings
+            from arq.worker import Worker
             from src.tasks.worker import WorkerSettings
             
-            async def run_arq_worker():
-                """Run ARQ worker in background."""
-                from arq.worker import run_worker
-                try:
-                    await run_worker(WorkerSettings)
-                except Exception as e:
-                    logger.error(f"ARQ worker error: {e}")
-            
-            arq_task = asyncio.create_task(run_arq_worker())
+            # Create worker instance and run it as a task
+            redis_settings = WorkerSettings.redis_settings()
+            worker = Worker(
+                functions=WorkerSettings.functions,
+                cron_jobs=WorkerSettings.cron_jobs,
+                redis_settings=redis_settings,
+                max_jobs=WorkerSettings.max_jobs,
+                job_timeout=WorkerSettings.job_timeout,
+                keep_result=WorkerSettings.keep_result,
+                on_startup=WorkerSettings.on_startup,
+                on_shutdown=WorkerSettings.on_shutdown,
+                on_job_start=WorkerSettings.on_job_start,
+                on_job_end=WorkerSettings.on_job_end,
+            )
+            arq_task = asyncio.create_task(worker.async_run())
             logger.info("ARQ background worker started")
         except Exception as e:
             logger.error(f"Failed to start ARQ worker: {e}")
