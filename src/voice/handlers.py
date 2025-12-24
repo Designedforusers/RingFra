@@ -104,15 +104,16 @@ async def handle_incoming_call(request: Request) -> Response:
     response = VoiceResponse()
 
     # Check if user exists (for multi-tenant mode)
+    # TODO: Re-enable after demo - for now, allow all callers
     user_exists = True
-    if settings.DATABASE_URL and caller_phone:
-        try:
-            from src.db.users import get_user_by_phone
-            user = await get_user_by_phone(caller_phone)
-            user_exists = user is not None
-        except Exception as e:
-            logger.error(f"Failed to check user: {e}")
-            user_exists = True  # Fail open
+    # if settings.DATABASE_URL and caller_phone:
+    #     try:
+    #         from src.db.users import get_user_by_phone
+    #         user = await get_user_by_phone(caller_phone)
+    #         user_exists = user is not None
+    #     except Exception as e:
+    #         logger.error(f"Failed to check user: {e}")
+    #         user_exists = True  # Fail open
     
     if not user_exists:
         # New user - send SMS with signup link and play message
