@@ -209,9 +209,9 @@ async def run_sdk_pipeline(
         api_key=settings.DEEPGRAM_API_KEY,
         model="flux-general-en",
         params=DeepgramFluxSTTService.InputParams(
-            eot_threshold=0.75,       # Slightly higher = wait for more certainty user is done
-            eot_timeout_ms=6000,      # 6 sec max silence before forcing end-of-turn
-            keyterm=["solhedge", "render", "deploy", "github", "commit", "push", "merge"],
+            eot_threshold=0.65,       # Balanced - responsive but not too jumpy
+            eot_timeout_ms=3000,      # 3 sec max silence before forcing end-of-turn
+            keyterm=["render", "deploy", "github", "commit", "push", "merge", "redis", "postgres"],
         ),
     )
     
@@ -258,9 +258,25 @@ async def run_sdk_pipeline(
         
         # Send greeting IMMEDIATELY (don't wait for SDK connection)
         if call_type.startswith("outbound_") and callback_context:
-            greeting = f"Hi, I'm calling back about {callback_context.get('task_description', 'your task')}."
+            # Build informative callback greeting
+            task = callback_context.get('task_description') or callback_context.get('task_type') or 'your request'
+            status = callback_context.get('status', 'completed')
+            summary = callback_context.get('summary', '')
+            
+            if status == 'completed' and callback_context.get('success', True):
+                if summary:
+                    greeting = f"Hey, good news! {summary}"
+                else:
+                    greeting = f"Hey, I finished {task}. Everything went smoothly."
+            elif status == 'failed' or not callback_context.get('success', True):
+                greeting = f"Hey, I ran into an issue with {task}. {summary}" if summary else f"Hey, I ran into an issue with {task}."
+            elif call_type == "outbound_reminder":
+                message = callback_context.get('reminder') or callback_context.get('message') or task
+                greeting = f"Hey, just a reminder: {message}"
+            else:
+                greeting = f"Hey, calling about {task}. {summary}" if summary else f"Hey, calling back about {task}."
         else:
-            greeting = "Hey, I'm your on-call engineer. What can I help you with?"
+            greeting = "Hey, what's up?"
         
         await sdk_bridge.push_frame(TextFrame(text=greeting))
         
