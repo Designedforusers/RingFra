@@ -212,8 +212,26 @@ class SDKBridgeProcessor(FrameProcessor):
         
         # Check for goodbye first - compress before ending
         if self._is_goodbye(text):
-            logger.info("User said goodbye - ending call")
-            await self.push_frame(TextFrame(text="Goodbye! Talk to you later."))
+            logger.info("User said goodbye - compressing session and ending call")
+            
+            # Tell user we're saving (sets expectation for brief pause)
+            await self.push_frame(TextFrame(text="Got it! Saving our conversation..."))
+            
+            # Compress NOW while session is still fully active
+            # This takes 2-5 seconds but user knows to wait
+            try:
+                summary = await self.session.compress_and_save_memory()
+                if summary:
+                    logger.info(f"Compression complete: {len(summary)} chars saved")
+                    await self.push_frame(TextFrame(text="Done! Talk to you later."))
+                else:
+                    # No user_id or compression failed - still say goodbye gracefully
+                    logger.debug("No compression performed (no user_id or failed)")
+                    await self.push_frame(TextFrame(text="Talk to you later!"))
+            except Exception as e:
+                logger.error(f"Compression error during goodbye: {e}")
+                await self.push_frame(TextFrame(text="Talk to you later!"))
+            
             await self.push_frame(LLMFullResponseEndFrame())
             
             # Trigger end of call callback if set
