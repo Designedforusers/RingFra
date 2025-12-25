@@ -180,14 +180,35 @@ class SDKBridgeProcessor(FrameProcessor):
         """Send user input to SDK and stream response to TTS."""
         logger.info(f"User said: {text}")
         
-        # Check for goodbye first (no filler needed)
+        # Check for goodbye first - compress before ending
         if self._is_goodbye(text):
-            logger.info("User said goodbye - ending call")
-            await self.push_frame(TextFrame(text="Goodbye! Talk to you later."))
+            logger.info("User said goodbye - compressing session and ending call")
+            
+            # Tell user we're saving (sets expectation for brief pause)
+            await self.push_frame(TextFrame(text="Got it! Saving our conversation..."))
+            
+            # Compress NOW while session is still fully active
+            # This takes 2-5 seconds but user knows to wait
+            try:
+                summary = await self.session.compress_and_save_memory()
+                if summary:
+                    logger.info(f"Compression complete: {len(summary)} chars saved")
+                    await self.push_frame(TextFrame(text="Done! Talk to you later."))
+                else:
+                    # No user_id or compression failed - still say goodbye gracefully
+                    logger.debug("No compression performed (no user_id or failed)")
+                    await self.push_frame(TextFrame(text="Talk to you later!"))
+            except Exception as e:
+                logger.error(f"Compression error during goodbye: {e}")
+                await self.push_frame(TextFrame(text="Talk to you later!"))
+            
             await self.push_frame(LLMFullResponseEndFrame())
-            # Trigger end of call
+            
+            # Trigger end of call callback if set
             if self._end_call_callback:
                 await self._end_call_callback()
+            
+            # End the call - agent hangs up
             await self.push_frame(EndFrame())
             return
         
@@ -384,23 +405,17 @@ async def run_sdk_pipeline(
     
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
-        logger.info("Client disconnected - compressing and saving session memory")
+        logger.info("Client disconnected - cleaning up session")
         
-        # Compress conversation and save to database (like /compact)
-        # Must be done before disconnect while session is still active
-        if user_context and settings.DATABASE_URL:
-            try:
-                summary = await session.compress_and_save_memory()
-                if summary:
-                    logger.info(f"Session memory saved: {summary[:100]}...")
-            except Exception as e:
-                logger.error(f"Failed to save session memory: {e}")
+        # NOTE: Compression is now handled in _process_user_input when user says goodbye.
+        # This handler runs in a different async context which causes "exit cancel scope" errors.
+        # If user hangs up abruptly (no goodbye), we lose this session's memory.
+        # Future improvement: Add Zep for real-time message persistence + ARQ for async compression.
         
         await session.disconnect()
         
         # Don't await task.cancel() - it causes async context issues
         # The pipeline will clean up naturally when the websocket closes
-        # task.cancel() is called synchronously by the runner
     
     # === Run ===
     runner = PipelineRunner(handle_sigint=False, force_gc=True)
