@@ -7,31 +7,27 @@ Handles:
 - Scheduled reminders
 """
 
-import asyncio
 from typing import Any
 
 from arq import cron
 from arq.connections import RedisSettings
 from loguru import logger
 
-from src.config import settings
 from src.callbacks.outbound import initiate_callback, send_sms
 from src.callbacks.router import (
     Event,
     Severity,
-    notify_user,
-    service_down_event,
     deploy_failed_event,
     high_cpu_event,
     high_memory_event,
+    notify_user,
 )
+from src.config import settings
 from src.tasks.monitors import (
     HealthStatus,
     poll_render_services,
-    check_specific_service,
 )
 from src.tasks.queue import get_monitored_services
-
 
 # =============================================================================
 # Task Handlers
@@ -98,6 +94,187 @@ async def execute_task_and_callback(
         )
 
     return result
+
+
+async def execute_background_task(ctx: dict, task_id: str) -> dict[str, Any]:
+    """
+    Execute a background task with full Claude SDK capabilities.
+    
+    Spawns a headless SDK session that executes the task plan autonomously,
+    then calls the user back with the result.
+    """
+    from claude_agent_sdk import (
+        AssistantMessage,
+        ClaudeAgentOptions,
+        ClaudeSDKClient,
+        TextBlock,
+    )
+
+    from src.db.background_tasks import get_background_task, update_task_status
+    from src.db.users import get_user_credentials, get_user_repos
+
+    logger.info(f"Executing background task: {task_id}")
+
+    # Load task from database
+    task = await get_background_task(task_id)
+    if not task:
+        logger.error(f"Task {task_id} not found")
+        return {"error": "Task not found"}
+
+    phone = task["phone"]
+    user_id = task["user_id"]
+    plan = task["plan"]
+    task_type = task["task_type"]
+
+    # Update status to running
+    await update_task_status(task_id, "running")
+
+    # Load user context (credentials, repos)
+    user_context = None
+    cwd = "/app"
+    try:
+        # Get credentials
+        github_creds = await get_user_credentials(user_id, "github")
+        render_creds = await get_user_credentials(user_id, "render")
+        repos = await get_user_repos(user_id)
+
+        user_context = {
+            "user_id": user_id,
+            "credentials": {
+                "github": github_creds or {},
+                "render": render_creds or {},
+            },
+            "repos": repos or [],
+        }
+
+        # Set working directory to user's repo if available
+        if repos and repos[0].get("local_path"):
+            cwd = repos[0]["local_path"]
+    except Exception as e:
+        logger.warning(f"Failed to load full user context: {e}")
+
+    # Build system prompt with the plan
+    steps_formatted = "\n".join(f"  {i+1}. {step}" for i, step in enumerate(plan.get("steps", [])))
+    system_prompt = f"""You are executing a background task AUTONOMOUSLY. The user is NOT on the call.
+
+## CRITICAL RULES
+- Do NOT ask questions or wait for user input
+- Make decisions and proceed
+- If something fails, try to fix it yourself
+- If you truly cannot proceed, document why and stop
+
+## Your Task
+**Objective**: {plan.get('objective', 'Complete the requested task')}
+
+**Steps**:
+{steps_formatted}
+
+**Success Criteria**: {plan.get('success_criteria', 'Task completes without errors')}
+
+**Context**: {plan.get('context', 'No additional context')}
+
+Execute each step. When done, provide a clear summary of what happened."""
+
+    # Get API keys for MCP
+    render_api_key = settings.RENDER_API_KEY
+    github_token = settings.GITHUB_TOKEN or ""
+
+    if user_context:
+        creds = user_context.get("credentials", {})
+        if creds.get("render", {}).get("access_token"):
+            render_api_key = creds["render"]["access_token"]
+        if creds.get("github", {}).get("access_token"):
+            github_token = creds["github"]["access_token"]
+
+    # Build MCP servers config
+    mcp_servers = {
+        "render": {
+            "type": "http",
+            "url": "https://mcp.render.com/mcp",
+            "headers": {
+                "Authorization": f"Bearer {render_api_key}",
+            },
+        },
+    }
+
+    # Environment for Bash tools
+    env_vars = {}
+    if github_token:
+        env_vars["GH_TOKEN"] = github_token
+        env_vars["GITHUB_TOKEN"] = github_token
+
+    # Build SDK options
+    options = ClaudeAgentOptions(
+        cwd=cwd,
+        env=env_vars,
+        system_prompt=system_prompt,
+        mcp_servers=mcp_servers,
+        permission_mode="bypassPermissions",  # AUTONOMOUS - no prompts
+        allowed_tools=[
+            "Read", "Write", "Edit", "Glob", "Grep", "Bash",
+            "mcp__render__list_services",
+            "mcp__render__get_service",
+            "mcp__render__list_deploys",
+            "mcp__render__get_deploy",
+            "mcp__render__list_logs",
+            "mcp__render__get_metrics",
+        ],
+        max_turns=30,
+    )
+
+    result_text = ""
+    total_cost = 0.0
+    status = "completed"
+    error_msg = None
+
+    try:
+        logger.info(f"Starting headless SDK session for task {task_id}")
+
+        async with ClaudeSDKClient(options) as client:
+            await client.query(f"Execute this task: {plan.get('objective', task_type)}")
+
+            async for msg in client.receive_response():
+                if isinstance(msg, AssistantMessage):
+                    for block in msg.content:
+                        if isinstance(block, TextBlock):
+                            result_text += block.text + "\n"
+
+                # Capture cost from result message
+                if hasattr(msg, 'total_cost_usd') and msg.total_cost_usd:
+                    total_cost = msg.total_cost_usd
+
+        logger.info(f"Task {task_id} completed. Cost: ${total_cost:.4f}")
+        await update_task_status(task_id, "completed", result=result_text, cost_usd=total_cost)
+
+    except Exception as e:
+        logger.error(f"Task {task_id} failed: {e}")
+        status = "failed"
+        error_msg = str(e)
+        result_text = f"Task failed: {e}"
+        await update_task_status(task_id, "failed", error=error_msg)
+
+    # Call the user back with the result
+    try:
+        await initiate_callback(
+            phone=phone,
+            context={
+                "task_type": task_type,
+                "objective": plan.get("objective", ""),
+                "summary": result_text[:500] if result_text else "Task completed",
+                "status": status,
+                "success": status == "completed",
+            },
+            callback_type="task_complete",
+        )
+    except Exception as e:
+        logger.error(f"Failed to initiate callback for task {task_id}: {e}")
+        # Fall back to SMS
+        await send_sms(
+            phone=phone,
+            message=f"[PhoneFix] {task_type} {status}: {result_text[:100] if result_text else 'Task completed'}",
+        )
+
+    return {"task_id": task_id, "status": status, "result": result_text[:500]}
 
 
 async def reminder_callback(
@@ -211,6 +388,7 @@ class WorkerSettings:
     # Task functions that can be called
     functions = [
         execute_task_and_callback,
+        execute_background_task,  # Autonomous SDK execution
         reminder_callback,
     ]
 
@@ -225,7 +403,7 @@ class WorkerSettings:
 
     # Worker settings
     max_jobs = 10
-    job_timeout = 300  # 5 minutes
+    job_timeout = 1800  # 30 minutes for background tasks
     keep_result = 3600  # 1 hour
     keep_result_forever = False
 

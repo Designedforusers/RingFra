@@ -18,30 +18,26 @@ The SDK handles:
 - File checkpointing for rewinding changes
 """
 
-import asyncio
-from pathlib import Path
-from typing import AsyncIterator, Callable, Any
-from uuid import UUID
-
-from claude_agent_sdk import (
-    ClaudeSDKClient,
-    ClaudeAgentOptions,
-    AssistantMessage,
-    ResultMessage,
-    TextBlock,
-    ToolUseBlock,
-    tool,
-    create_sdk_mcp_server,
-)
-from loguru import logger
-
-from src.config import settings
-
-
 # === Session Context (for tools to access) ===
 # Uses contextvars for async-safe, per-task isolation.
 # This allows multiple concurrent calls without context bleeding.
 from contextvars import ContextVar
+from pathlib import Path
+from typing import Any, AsyncIterator
+
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    ClaudeSDKClient,
+    ResultMessage,
+    TextBlock,
+    ToolUseBlock,
+    create_sdk_mcp_server,
+    tool,
+)
+from loguru import logger
+
+from src.config import settings
 
 _session_context_var: ContextVar[dict] = ContextVar('session_context', default={})
 
@@ -54,14 +50,14 @@ def _set_session_context(user_context: dict | None, caller_phone: str | None) ->
         "github_token": settings.GITHUB_TOKEN,
         "task_context": {},  # Stores worktree info between tool calls
     }
-    
+
     # Override with user-specific credentials if available
     if user_context:
         creds = user_context.get("credentials", {})
         github_creds = creds.get("github", {})
         if github_creds.get("access_token"):
             ctx["github_token"] = github_creds["access_token"]
-    
+
     _session_context_var.set(ctx)
 
 
@@ -79,43 +75,80 @@ def _update_task_context(task_ctx: dict) -> None:
 
 
 # Custom tools for proactive features
-@tool("schedule_callback", "Execute a background task and call back when done. Use for 'fix X and call me back' or 'deploy and let me know'. NOT for simple timed callbacks - use set_reminder for those.", {
-    "task_description": str,
+@tool("handoff_task", """Hand off a task to run AFTER the call ends. The background agent will execute autonomously with full tool access.
+
+Use when user says things like:
+- "Deploy to staging and call me back"
+- "Fix the bug and let me know when it's done"
+- "Run the tests and call me with the results"
+- "Create a PR and call me back"
+
+You MUST provide a detailed plan so the background agent knows exactly what to do.""", {
+    "task_type": str,  # "deploy", "fix_bug", "run_tests", "create_pr", etc.
+    "plan": dict,  # {"objective": str, "steps": list[str], "success_criteria": str, "context": str}
     "notify_on": str,  # "success", "failure", "both"
 })
-async def schedule_callback_tool(args: dict[str, Any]) -> dict[str, Any]:
-    """Schedule a callback when async task completes."""
-    from src.tasks.queue import enqueue_task_with_callback, RedisUnavailableError
+async def handoff_task_tool(args: dict[str, Any]) -> dict[str, Any]:
+    """Hand off a task for autonomous background execution with callback."""
     from src.callbacks.outbound import send_sms
-    
+    from src.db.background_tasks import create_background_task
+    from src.tasks.queue import RedisUnavailableError, enqueue_background_task
+
     ctx = _get_session_context()
     phone = ctx.get("caller_phone")
+    user_context = ctx.get("user_context", {})
+    user_id = user_context.get("user_id")
+
     if not phone:
         return {
             "content": [{"type": "text", "text": "No phone number available for callback"}],
             "is_error": True,
         }
-    
+
+    if not user_id:
+        return {
+            "content": [{"type": "text", "text": "No user context available. Background tasks require an authenticated user."}],
+            "is_error": True,
+        }
+
+    plan = args.get("plan", {})
+    if not plan.get("objective") or not plan.get("steps"):
+        return {
+            "content": [{"type": "text", "text": "Plan must include 'objective' and 'steps'. Please provide a detailed plan."}],
+            "is_error": True,
+        }
+
     try:
-        task_id = await enqueue_task_with_callback(
-            task_type=args.get("task_description", "task"),
-            params={"notify_on": args.get("notify_on", "both")},
+        # Save task to Postgres
+        task_id = await create_background_task(
+            user_id=user_id,
             phone=phone,
+            task_type=args.get("task_type", "task"),
+            plan=plan,
         )
+
+        # Enqueue for background execution
+        await enqueue_background_task(task_id)
+
         return {
             "content": [{
                 "type": "text",
-                "text": f"Callback scheduled. I'll call you back when the task is done. Task ID: {task_id}"
+                "text": f"Task handed off for background execution. I'll call you back when it's done. Task ID: {task_id}"
             }]
         }
     except RedisUnavailableError:
-        # Graceful degradation: notify user via SMS
-        await send_sms(phone, f"[PhoneFix] Sorry, I couldn't schedule your callback for '{args.get('task_description', 'task')}'. The background service is temporarily unavailable. Please try again later or call back.")
+        await send_sms(phone, "[PhoneFix] Sorry, I couldn't schedule your task. The background service is temporarily unavailable. Please try again later.")
         return {
             "content": [{
                 "type": "text",
-                "text": "I couldn't schedule the callback right now - the background service is temporarily unavailable. I've sent you an SMS to let you know. Please try again in a few minutes."
+                "text": "I couldn't hand off the task right now - the background service is temporarily unavailable. I've sent you an SMS. Please try again in a few minutes."
             }],
+            "is_error": True,
+        }
+    except Exception as e:
+        logger.error(f"Failed to hand off task: {e}")
+        return {
+            "content": [{"type": "text", "text": f"Failed to hand off task: {e}"}],
             "is_error": True,
         }
 
@@ -126,7 +159,7 @@ async def schedule_callback_tool(args: dict[str, Any]) -> dict[str, Any]:
 async def send_sms_tool(args: dict[str, Any]) -> dict[str, Any]:
     """Send SMS to user."""
     from src.notifications import send_sms
-    
+
     # Get phone from session context
     ctx = _get_session_context()
     phone = ctx.get("caller_phone")
@@ -135,9 +168,9 @@ async def send_sms_tool(args: dict[str, Any]) -> dict[str, Any]:
             "content": [{"type": "text", "text": "No phone number available for SMS"}],
             "is_error": True,
         }
-    
+
     success = await send_sms(phone, args["message"])
-    
+
     return {
         "content": [{
             "type": "text",
@@ -152,9 +185,9 @@ async def send_sms_tool(args: dict[str, Any]) -> dict[str, Any]:
 })
 async def set_reminder_tool(args: dict[str, Any]) -> dict[str, Any]:
     """Set a reminder that triggers a callback."""
-    from src.tasks.queue import enqueue_reminder, RedisUnavailableError
     from src.callbacks.outbound import send_sms
-    
+    from src.tasks.queue import RedisUnavailableError, enqueue_reminder
+
     ctx = _get_session_context()
     phone = ctx.get("caller_phone")
     if not phone:
@@ -162,9 +195,9 @@ async def set_reminder_tool(args: dict[str, Any]) -> dict[str, Any]:
             "content": [{"type": "text", "text": "No phone number available for reminder"}],
             "is_error": True,
         }
-    
+
     delay_seconds = args["delay_minutes"] * 60
-    
+
     try:
         reminder_id = await enqueue_reminder(
             phone=phone,
@@ -183,7 +216,7 @@ async def set_reminder_tool(args: dict[str, Any]) -> dict[str, Any]:
         return {
             "content": [{
                 "type": "text",
-                "text": f"I couldn't set the reminder right now - the background service is temporarily unavailable. I've sent you an SMS about it. Please try again in a few minutes."
+                "text": "I couldn't set the reminder right now - the background service is temporarily unavailable. I've sent you an SMS about it. Please try again in a few minutes."
             }],
             "is_error": True,
         }
@@ -197,12 +230,13 @@ async def set_reminder_tool(args: dict[str, Any]) -> dict[str, Any]:
 })
 async def setup_repo_for_task_tool(args: dict[str, Any]) -> dict[str, Any]:
     """Set up a repo with isolated worktree for a task."""
-    from src.repos.manager import create_task_worktree, CommitType
     from uuid import uuid4
-    
+
+    from src.repos.manager import CommitType, create_task_worktree
+
     repo_url = args["repo_url"]
     task_desc = args.get("task_description", "task")
-    
+
     # Get context
     ctx = _get_session_context()
     github_token = ctx.get("github_token")
@@ -211,11 +245,11 @@ async def setup_repo_for_task_tool(args: dict[str, Any]) -> dict[str, Any]:
             "content": [{"type": "text", "text": "No GitHub token available"}],
             "is_error": True,
         }
-    
+
     # Use user_id from context or generate one
     user_context = ctx.get("user_context", {})
     user_id = user_context.get("user_id") or uuid4()
-    
+
     try:
         # Determine commit type from task description
         desc_lower = task_desc.lower()
@@ -227,7 +261,7 @@ async def setup_repo_for_task_tool(args: dict[str, Any]) -> dict[str, Any]:
             commit_type = CommitType.REFACTOR
         else:
             commit_type = CommitType.FIX
-        
+
         # Create worktree
         worktree_path, branch_name = await create_task_worktree(
             user_id=user_id,
@@ -235,7 +269,7 @@ async def setup_repo_for_task_tool(args: dict[str, Any]) -> dict[str, Any]:
             github_token=github_token,
             commit_type=commit_type,
         )
-        
+
         # Store task context for later tools (ship_changes, cleanup)
         _update_task_context({
             "worktree_path": str(worktree_path),
@@ -243,7 +277,7 @@ async def setup_repo_for_task_tool(args: dict[str, Any]) -> dict[str, Any]:
             "repo_url": repo_url,
             "user_id": str(user_id),
         })
-        
+
         return {
             "content": [{
                 "type": "text",
@@ -264,31 +298,32 @@ async def setup_repo_for_task_tool(args: dict[str, Any]) -> dict[str, Any]:
 })
 async def ship_changes_tool(args: dict[str, Any]) -> dict[str, Any]:
     """Ship changes: commit, push, create PR."""
-    from src.repos.manager import ship_changes, TestStrategy
     from pathlib import Path
-    
+
+    from src.repos.manager import TestStrategy, ship_changes
+
     # Get task context from session
     ctx = _get_session_context()
     task_ctx = ctx.get("task_context", {})
     worktree_path = task_ctx.get("worktree_path")
     branch_name = task_ctx.get("branch_name")
     repo_url = task_ctx.get("repo_url")
-    
+
     if not all([worktree_path, branch_name, repo_url]):
         return {
             "content": [{"type": "text", "text": "No active task. Use setup_repo_for_task first."}],
             "is_error": True,
         }
-    
+
     github_token = ctx.get("github_token")
     if not github_token:
         return {
             "content": [{"type": "text", "text": "No GitHub token available"}],
             "is_error": True,
         }
-    
+
     test_strategy = TestStrategy.LOCAL if args.get("run_tests", True) else TestStrategy.NONE
-    
+
     try:
         result = await ship_changes(
             worktree_path=Path(worktree_path),
@@ -299,7 +334,7 @@ async def ship_changes_tool(args: dict[str, Any]) -> dict[str, Any]:
             description=args.get("description", ""),
             test_strategy=test_strategy,
         )
-        
+
         if result.success:
             return {
                 "content": [{"type": "text", "text": result.message}],
@@ -319,18 +354,19 @@ async def ship_changes_tool(args: dict[str, Any]) -> dict[str, Any]:
 @tool("cleanup_task", "Clean up worktree after task is complete.", {})
 async def cleanup_task_tool(args: dict[str, Any]) -> dict[str, Any]:
     """Clean up worktree after task completion."""
-    from src.repos.manager import cleanup_worktree
     from pathlib import Path
-    
+
+    from src.repos.manager import cleanup_worktree
+
     ctx = _get_session_context()
     task_ctx = ctx.get("task_context", {})
     worktree_path = task_ctx.get("worktree_path")
-    
+
     if not worktree_path:
         return {
             "content": [{"type": "text", "text": "No active task to clean up."}],
         }
-    
+
     try:
         await cleanup_worktree(Path(worktree_path))
         # Clear task context
@@ -351,24 +387,25 @@ async def cleanup_task_tool(args: dict[str, Any]) -> dict[str, Any]:
 async def update_user_memory_tool(args: dict[str, Any]) -> dict[str, Any]:
     """Update user's CLAUDE.md file with new information."""
     from pathlib import Path
+
     import aiofiles
-    
+
     ctx = _get_session_context()
     user_context = ctx.get("user_context", {})
-    
+
     # Get working directory (user's repo)
     repos = user_context.get("repos", [])
     if not repos or not repos[0].get("local_path"):
         return {
             "content": [{"type": "text", "text": "No user repo configured - memory not saved to file."}],
         }
-    
+
     repo_path = Path(repos[0]["local_path"])
     claude_md_path = repo_path / "CLAUDE.md"
-    
+
     section = args["section"]
     new_content = args["content"]
-    
+
     try:
         # Read existing content or start fresh
         if claude_md_path.exists():
@@ -376,7 +413,7 @@ async def update_user_memory_tool(args: dict[str, Any]) -> dict[str, Any]:
                 existing = await f.read()
         else:
             existing = "# User Memory\n\nThis file is automatically updated by your voice agent.\n"
-        
+
         # Check if section exists
         section_header = f"## {section}"
         if section_header in existing:
@@ -385,7 +422,7 @@ async def update_user_memory_tool(args: dict[str, Any]) -> dict[str, Any]:
             new_lines = []
             in_section = False
             content_added = False
-            
+
             for line in lines:
                 if line.strip() == section_header:
                     in_section = True
@@ -399,20 +436,20 @@ async def update_user_memory_tool(args: dict[str, Any]) -> dict[str, Any]:
                     new_lines.append(line)
                 else:
                     new_lines.append(line)
-            
+
             # If section was last, add at end
             if in_section and not content_added:
                 new_lines.append(f"- {new_content}")
-            
+
             updated = "\n".join(new_lines)
         else:
             # Add new section at end
             updated = existing.rstrip() + f"\n\n{section_header}\n- {new_content}\n"
-        
+
         # Write back
         async with aiofiles.open(claude_md_path, "w") as f:
             await f.write(updated)
-        
+
         return {
             "content": [{"type": "text", "text": f"Memory updated: added to {section}"}],
         }
@@ -438,7 +475,7 @@ def get_sdk_options(
     - Full autonomy (bypassPermissions)
     - Custom tools for proactive features
     """
-    
+
     # Determine working directory
     if cwd:
         working_dir = str(cwd)
@@ -451,11 +488,11 @@ def get_sdk_options(
             working_dir = "/app"
     else:
         working_dir = "/app"
-    
+
     # Get user's credentials if available (multi-tenant)
     render_api_key = settings.RENDER_API_KEY
     github_token = settings.GITHUB_TOKEN or ""
-    
+
     if user_context:
         creds = user_context.get("credentials", {})
         # Render API key
@@ -466,15 +503,15 @@ def get_sdk_options(
         github_creds = creds.get("github", {})
         if github_creds.get("access_token"):
             github_token = github_creds["access_token"]
-    
+
     # Create custom MCP server for proactive tools
     proactive_tools = [
-        schedule_callback_tool,
+        handoff_task_tool,
         send_sms_tool,
         set_reminder_tool,
         update_user_memory_tool,  # Always available for memory persistence
     ]
-    
+
     # Add repo management tools in multi-tenant (production) mode
     if settings.MULTI_TENANT:
         proactive_tools.extend([
@@ -482,16 +519,16 @@ def get_sdk_options(
             ship_changes_tool,
             cleanup_task_tool,
         ])
-    
+
     proactive_server = create_sdk_mcp_server(
         name="proactive",
         version="1.0.0",
         tools=proactive_tools,
     )
-    
+
     # Build system prompt with Zep context
     system_prompt = _build_system_prompt(user_context, zep_context)
-    
+
     # MCP servers configuration
     mcp_servers = {
         # Render MCP - official hosted server
@@ -511,29 +548,29 @@ def get_sdk_options(
         # Custom proactive tools
         "proactive": proactive_server,
     }
-    
+
     # Environment variables for tools (gh CLI, git, etc.)
     env_vars = {}
     if github_token:
         env_vars["GH_TOKEN"] = github_token
         env_vars["GITHUB_TOKEN"] = github_token  # Some tools use this
-    
+
     return ClaudeAgentOptions(
         # Working directory for file operations
         cwd=working_dir,
-        
+
         # Environment variables (GH_TOKEN for gh CLI)
         env=env_vars,
-        
+
         # System prompt with user context
         system_prompt=system_prompt,
-        
+
         # MCP servers
         mcp_servers=mcp_servers,
-        
+
         # Full autonomy - accept all edits automatically
         permission_mode="bypassPermissions",
-        
+
         # Allow all standard Claude Code tools + MCP tools
         allowed_tools=[
             # File operations
@@ -543,18 +580,18 @@ def get_sdk_options(
             "Glob",
             "Grep",
             "NotebookEdit",
-            
+
             # Execution
             "Bash",
-            
+
             # Task management
             "Task",
             "TodoWrite",
-            
+
             # Web
             "WebFetch",
             "WebSearch",
-            
+
             # MCP - Render (all tools)
             "mcp__render__list_services",
             "mcp__render__get_service",
@@ -576,13 +613,13 @@ def get_sdk_options(
             "mcp__render__list_key_value",
             "mcp__render__get_key_value",
             "mcp__render__create_key_value",
-            
+
             # MCP - Exa (web search and code context)
             "mcp__exa__web_search_exa",
             "mcp__exa__get_code_context_exa",
-            
+
             # MCP - Proactive (custom tools)
-            "mcp__proactive__schedule_callback",
+            "mcp__proactive__handoff_task",
             "mcp__proactive__send_sms",
             "mcp__proactive__set_reminder",
             "mcp__proactive__update_user_memory",
@@ -594,14 +631,14 @@ def get_sdk_options(
                 "mcp__proactive__cleanup_task",
             ] if settings.MULTI_TENANT else []
         ),
-        
+
         # Enable partial message streaming for TTS
         include_partial_messages=True,
-        
+
         # Enable Claude Code filesystem-based configuration
         # This allows SDK to read CLAUDE.md from user's working directory
         setting_sources=["project"],
-        
+
         # Enable file checkpointing so we can rewind changes
         # enable_file_checkpointing=True,  # Uncomment when needed
     )
@@ -609,7 +646,7 @@ def get_sdk_options(
 
 def _build_system_prompt(user_context: dict | None, zep_context: str | None = None) -> str:
     """Build the system prompt with user context and Zep memory."""
-    
+
     base_prompt = """You are an expert on-call engineer accessible via phone. You help users manage their code and infrastructure through voice commands.
 
 ## Your Capabilities
@@ -663,7 +700,7 @@ Update the user's CLAUDE.md (via update_user_memory tool) when you learn:
 - Important context ("primary repo is PhoneFix", "uses Render for hosting")
 Do this automatically without asking - be concise, use bullet points.
 """
-    
+
     # Add Zep memory context if available (from previous conversations)
     if zep_context:
         base_prompt += f"""
@@ -672,18 +709,18 @@ The following context is from your previous conversations with this user. Use it
 
 {zep_context}
 """
-    
+
     if not user_context:
         return base_prompt
-    
+
     # Add user-specific context
     context_parts = [base_prompt, "\n## User Context\n"]
-    
+
     # User info
     user = user_context.get("user", {})
     if user.get("phone"):
         context_parts.append(f"**Caller**: {user.get('phone')}\n")
-    
+
     # Repositories
     repos = user_context.get("repos", [])
     if repos:
@@ -696,12 +733,12 @@ The following context is from your previous conversations with this user. Use it
             if path:
                 context_parts.append(f" at {path}")
             context_parts.append("\n")
-    
+
     # Previous conversation summary
     memory = user_context.get("memory", {})
     if memory.get("summary"):
         context_parts.append(f"\n**Previous Conversation**:\n{memory.get('summary')}\n")
-    
+
     return "".join(context_parts)
 
 
@@ -722,7 +759,7 @@ class VoiceAgentSession:
                 # Stream text to TTS
                 await tts.speak(text)
     """
-    
+
     def __init__(
         self,
         user_context: dict | None = None,
@@ -736,46 +773,46 @@ class VoiceAgentSession:
         self.options = get_sdk_options(user_context, cwd)
         self.client: ClaudeSDKClient | None = None
         self._connected = False
-    
+
     def set_initial_zep_context(self, context: str) -> None:
         """Set initial Zep context before connecting."""
         self._zep_context = context
         # Rebuild options with Zep context included
         self.options = get_sdk_options(self.user_context, self.cwd, self._zep_context)
-    
+
     def update_zep_context(self, context: str) -> None:
         """Update Zep context after a turn (for next query)."""
         self._zep_context = context
         # Note: SDK maintains conversation history internally, so we don't need
         # to update options mid-session. The context is used for reference.
-    
+
     async def connect(self) -> None:
         """Connect to Claude Agent SDK."""
         if self._connected:
             return
-        
+
         # Set session context for tools to access
         _set_session_context(self.user_context, self.caller_phone)
-        
+
         self.client = ClaudeSDKClient(self.options)
         await self.client.connect()
         self._connected = True
         logger.info("VoiceAgentSession connected")
-    
+
     async def disconnect(self) -> None:
         """Disconnect from Claude Agent SDK."""
         if self.client and self._connected:
             await self.client.disconnect()
             self._connected = False
             logger.info("VoiceAgentSession disconnected")
-    
+
     async def __aenter__(self) -> "VoiceAgentSession":
         await self.connect()
         return self
-    
+
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         await self.disconnect()
-    
+
     async def query(self, prompt: str) -> AsyncIterator[str]:
         """
         Send a query and yield text responses for TTS.
@@ -792,11 +829,11 @@ class VoiceAgentSession:
         """
         if not self.client or not self._connected:
             raise RuntimeError("Session not connected")
-        
+
         logger.info(f"VoiceAgentSession query: {prompt[:100]}...")
-        
+
         await self.client.query(prompt)
-        
+
         async for message in self.client.receive_response():
             # Extract text from AssistantMessage
             if isinstance(message, AssistantMessage):
@@ -813,19 +850,19 @@ class VoiceAgentSession:
                             pass
                         else:
                             logger.debug(f"Tool called: {tool_name}")
-            
+
             # ResultMessage indicates completion
             elif isinstance(message, ResultMessage):
                 if message.is_error:
                     yield f"I encountered an error: {message.result or 'Unknown error'}"
                 logger.info(f"Query completed. Turns: {message.num_turns}, Cost: ${message.total_cost_usd or 0:.4f}")
-    
+
     async def interrupt(self) -> None:
         """Interrupt the current operation."""
         if self.client and self._connected:
             await self.client.interrupt()
             logger.info("VoiceAgentSession interrupted")
-    
+
     async def compress_and_save_memory(self) -> str | None:
         """
         Compress the conversation and save to database (like /compact).
@@ -840,18 +877,18 @@ class VoiceAgentSession:
         if not self.client or not self._connected:
             logger.warning("Cannot compress - session not connected")
             return None
-        
+
         # Get user_id from context
         user_id = None
         if self.user_context:
             user_id = self.user_context.get("user_id")
-        
+
         if not user_id:
             logger.debug("No user_id - skipping memory save (anonymous session)")
             return None
-        
+
         logger.info("Compressing conversation for memory persistence...")
-        
+
         # Ask Claude to summarize (uses full conversation context)
         compress_prompt = """Summarize our conversation concisely for future reference. Include:
 1. What tasks were completed and their outcomes
@@ -860,17 +897,17 @@ class VoiceAgentSession:
 4. Any user preferences or patterns you noticed (e.g., coding style, preferred tools)
 
 Keep it under 200 words. Be specific about file names, PR numbers, and error messages."""
-        
+
         try:
             await self.client.query(compress_prompt)
-            
+
             summary = ""
             async for message in self.client.receive_response():
                 if isinstance(message, AssistantMessage):
                     for block in message.content:
                         if isinstance(block, TextBlock):
                             summary = block.text.strip()
-            
+
             if summary:
                 # Save to database
                 from src.db.memory import update_session_memory
@@ -880,7 +917,7 @@ Keep it under 200 words. Be specific about file names, PR numbers, and error mes
             else:
                 logger.warning("Compression produced empty summary")
                 return None
-                
+
         except Exception as e:
             logger.error(f"Failed to compress session: {e}")
             return None

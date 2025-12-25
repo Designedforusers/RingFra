@@ -16,7 +16,7 @@ async def get_pool() -> asyncpg.Pool:
     if _pool is None:
         if not settings.DATABASE_URL:
             raise ValueError("DATABASE_URL not configured")
-        
+
         _pool = await asyncpg.create_pool(
             settings.DATABASE_URL,
             min_size=2,
@@ -38,11 +38,11 @@ async def close_pool() -> None:
 async def init_schema() -> None:
     """Initialize database schema if not exists."""
     pool = await get_pool()
-    
+
     async with pool.acquire() as conn:
         # Enable UUID extension
         await conn.execute('CREATE EXTENSION IF NOT EXISTS "pgcrypto"')
-        
+
         # Users table
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
@@ -52,7 +52,7 @@ async def init_schema() -> None:
                 created_at TIMESTAMP DEFAULT NOW()
             )
         ''')
-        
+
         # Credentials table (encrypted tokens)
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS credentials (
@@ -66,7 +66,7 @@ async def init_schema() -> None:
                 PRIMARY KEY (user_id, provider)
             )
         ''')
-        
+
         # Connected repos
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS repos (
@@ -80,7 +80,7 @@ async def init_schema() -> None:
                 created_at TIMESTAMP DEFAULT NOW()
             )
         ''')
-        
+
         # Task history
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS tasks (
@@ -95,7 +95,7 @@ async def init_schema() -> None:
                 completed_at TIMESTAMP
             )
         ''')
-        
+
         # Session memory
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS session_memory (
@@ -105,10 +105,31 @@ async def init_schema() -> None:
                 updated_at TIMESTAMP DEFAULT NOW()
             )
         ''')
-        
+
+        # Background tasks (for async execution with callbacks)
+        await conn.execute('''
+            CREATE TABLE IF NOT EXISTS background_tasks (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                phone VARCHAR(20) NOT NULL,
+                task_type VARCHAR(50) NOT NULL,
+                plan JSONB NOT NULL,
+                status VARCHAR(20) DEFAULT 'pending',
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP,
+                result_summary TEXT,
+                error TEXT,
+                cost_usd DECIMAL(10,4),
+                created_at TIMESTAMP DEFAULT NOW(),
+                arq_job_id VARCHAR(100)
+            )
+        ''')
+
         # Create indexes
         await conn.execute('CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone)')
         await conn.execute('CREATE INDEX IF NOT EXISTS idx_tasks_user_id ON tasks(user_id)')
         await conn.execute('CREATE INDEX IF NOT EXISTS idx_repos_user_id ON repos(user_id)')
-        
+        await conn.execute('CREATE INDEX IF NOT EXISTS idx_background_tasks_user_id ON background_tasks(user_id)')
+        await conn.execute('CREATE INDEX IF NOT EXISTS idx_background_tasks_status ON background_tasks(status)')
+
         logger.info("Database schema initialized")

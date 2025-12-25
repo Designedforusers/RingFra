@@ -63,6 +63,33 @@ async def enqueue_task_with_callback(
     return job.job_id
 
 
+async def enqueue_background_task(task_id: str) -> str:
+    """
+    Queue a background task for autonomous execution.
+
+    The task details are stored in Postgres. This just enqueues the job
+    to ARQ with the task_id reference.
+
+    Args:
+        task_id: UUID of the task in background_tasks table
+
+    Returns:
+        Job ID
+    """
+    pool = await get_redis_pool()
+    job = await pool.enqueue_job(
+        "execute_background_task",
+        task_id,
+    )
+
+    # Update task with ARQ job ID
+    from src.db.background_tasks import update_task_status
+    await update_task_status(task_id, "pending", arq_job_id=job.job_id)
+
+    logger.info(f"Queued background task {task_id}, arq_job_id={job.job_id}")
+    return job.job_id
+
+
 async def enqueue_reminder(
     phone: str,
     message: str,

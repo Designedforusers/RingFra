@@ -62,9 +62,14 @@ async def initiate_callback(
     elif callback_type == "alert":
         immediate_greeting = "Hey, I need to tell you something."
     else:
-        # task_complete
-        immediate_greeting = "Hey, I've got an update for you."
-    
+        # task_complete - provide context about what finished
+        task_type = context.get("task_type", "task")
+        success = context.get("success", True)
+        if success:
+            immediate_greeting = f"Hey, that {task_type} you asked me to run finished successfully."
+        else:
+            immediate_greeting = f"Hey, that {task_type} you asked me to run ran into an issue. Let me explain."
+
     # Build TwiML for outbound call with immediate audio
     twiml = f"""
     <Response>
