@@ -333,8 +333,8 @@ async def run_sdk_pipeline(
         api_key=settings.DEEPGRAM_API_KEY,
         model="flux-general-en",
         params=DeepgramFluxSTTService.InputParams(
-            eot_threshold=0.75,       # Higher = wait for more certainty user is done
-            eot_timeout_ms=5000,      # 5 sec max silence before forcing end-of-turn
+            eot_threshold=0.65,       # Balanced - responsive but not too jumpy
+            eot_timeout_ms=3000,      # 3 sec max silence before forcing end-of-turn
             keyterm=["render", "deploy", "github", "commit", "push", "merge", "redis", "postgres"],
         ),
     )
