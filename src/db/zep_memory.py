@@ -227,10 +227,16 @@ async def get_user_context_by_user(user_id: str) -> str | None:
         return None
     
     try:
-        # List user's threads to find most recent
-        threads = await client.thread.list_by_user(user_id=user_id, limit=1)
+        # List user's threads to find most recent (using user.get_threads, not thread.list_by_user)
+        threads = await client.user.get_threads(user_id=user_id)
         if threads and len(threads) > 0:
-            thread_id = threads[0].thread_id
+            # Sort by created_at descending to get most recent
+            sorted_threads = sorted(
+                threads, 
+                key=lambda t: t.created_at if hasattr(t, 'created_at') and t.created_at else "",
+                reverse=True
+            )
+            thread_id = sorted_threads[0].thread_id
             return await get_user_context(thread_id)
         return None
     except Exception as e:
