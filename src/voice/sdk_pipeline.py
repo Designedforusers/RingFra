@@ -212,26 +212,8 @@ class SDKBridgeProcessor(FrameProcessor):
         
         # Check for goodbye first - compress before ending
         if self._is_goodbye(text):
-            logger.info("User said goodbye - compressing session and ending call")
-            
-            # Tell user we're saving (sets expectation for brief pause)
-            await self.push_frame(TextFrame(text="Got it! Saving our conversation..."))
-            
-            # Compress NOW while session is still fully active
-            # This takes 2-5 seconds but user knows to wait
-            try:
-                summary = await self.session.compress_and_save_memory()
-                if summary:
-                    logger.info(f"Compression complete: {len(summary)} chars saved")
-                    await self.push_frame(TextFrame(text="Done! Talk to you later."))
-                else:
-                    # No user_id or compression failed - still say goodbye gracefully
-                    logger.debug("No compression performed (no user_id or failed)")
-                    await self.push_frame(TextFrame(text="Talk to you later!"))
-            except Exception as e:
-                logger.error(f"Compression error during goodbye: {e}")
-                await self.push_frame(TextFrame(text="Talk to you later!"))
-            
+            logger.info("User said goodbye - ending call")
+            await self.push_frame(TextFrame(text="Goodbye! Talk to you later."))
             await self.push_frame(LLMFullResponseEndFrame())
             
             # Trigger end of call callback if set
@@ -242,53 +224,45 @@ class SDKBridgeProcessor(FrameProcessor):
             await self.push_frame(EndFrame())
             return
         
-        # Send filler IMMEDIATELY to eliminate awkward silence
-        filler = self._get_contextual_filler(text)
-        await self.push_frame(TextFrame(text=filler))
-        logger.info(f"Sent filler: {filler}")
-        
-        # Start long-operation filler task (will send more fillers after 10s)
-        self._long_op_task = asyncio.create_task(self._stream_long_operation_fillers())
-        
-        # Wait for session to be ready (max 10 seconds)
+        # Wait for session to be ready (should already be ready)
         try:
             await asyncio.wait_for(self._session_ready.wait(), timeout=10.0)
         except asyncio.TimeoutError:
-            self._cancel_long_op_filler()
             logger.error("Timeout waiting for SDK session to connect")
-            await self.push_frame(TextFrame(text="I'm having trouble connecting. Let me try again."))
+            await self.push_frame(TextFrame(text="I'm still connecting. Please wait a moment."))
             await self.push_frame(LLMFullResponseEndFrame())
             return
+        
+        # Start long-operation filler task - only sends fillers after 10 seconds
+        # This handles the case where SDK/tools take a long time
+        self._long_op_task = asyncio.create_task(self._stream_long_operation_fillers())
         
         try:
             first_response = True
             logger.info(f"Starting SDK query for: {text[:50]}...")
             async for response_text in self.session.query(text):
-                logger.info(f"Got response_text: {repr(response_text)[:100]}")
                 if response_text:
                     # On first SDK response, cancel long-op fillers
-                    # No interruption needed - Pipecat queues TTS sequentially
                     if first_response:
                         self._cancel_long_op_filler()
                         first_response = False
                     
-                    # Send TextFrame to TTS - Pipecat will handle conversion
+                    # Send TextFrame to TTS
                     await self.push_frame(TextFrame(text=response_text))
-                    logger.info(f"SDK response chunk: {response_text[:50]}...")
+                    logger.debug(f"SDK response chunk: {response_text[:50]}...")
             
             # Signal end of response
             await self.push_frame(LLMFullResponseEndFrame())
         
         except asyncio.CancelledError:
-            # User interrupted - this is expected, don't treat as error
+            # User interrupted - this is expected
             self._cancel_long_op_filler()
             logger.info("SDK query cancelled due to user interruption")
-            # Don't push error frame - user interrupted intentionally
             
         except Exception as e:
             self._cancel_long_op_filler()
             logger.error(f"SDK query error: {e}")
-            await self.push_frame(TextFrame(text="I ran into an issue. Can you try that again?"))
+            await self.push_frame(TextFrame(text="I encountered an error. Please try again."))
             await self.push_frame(LLMFullResponseEndFrame())
 
 
@@ -359,8 +333,8 @@ async def run_sdk_pipeline(
         api_key=settings.DEEPGRAM_API_KEY,
         model="flux-general-en",
         params=DeepgramFluxSTTService.InputParams(
-            eot_threshold=0.65,       # Balanced - responsive but not too jumpy
-            eot_timeout_ms=3000,      # 3 sec max silence before forcing end-of-turn
+            eot_threshold=0.75,       # Higher = wait for more certainty user is done
+            eot_timeout_ms=5000,      # 5 sec max silence before forcing end-of-turn
             keyterm=["render", "deploy", "github", "commit", "push", "merge", "redis", "postgres"],
         ),
     )
@@ -405,10 +379,17 @@ async def run_sdk_pipeline(
     # === Event Handlers ===
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
-        logger.info("Client connected - starting SDK session")
+        logger.info("Client connected - connecting SDK session first...")
         
-        # For callbacks: Twilio already said "Hey, I've got an update" - just give the details
-        # For inbound: Full greeting needed
+        # Connect SDK FIRST - this takes ~4 seconds but Twilio already said
+        # "Connecting you to the Render infrastructure assistant" so user knows to wait
+        await session.connect()
+        logger.info("SDK session connected")
+        
+        # Mark session as ready so user input can be processed
+        sdk_bridge.mark_session_ready()
+        
+        # NOW send greeting - pipeline is ready, greeting will be spoken
         if call_type.startswith("outbound_") and callback_context:
             # Callback - Twilio already greeted, just give the substance
             cb_task = callback_context.get('task_description') or callback_context.get('task_type') or 'your request'
@@ -417,31 +398,22 @@ async def run_sdk_pipeline(
             
             if status == 'completed' and callback_context.get('success', True):
                 if summary:
-                    greeting = summary  # Just the summary, no "Hey good news"
+                    greeting = summary
                 else:
                     greeting = f"I finished {cb_task}. Everything went smoothly."
             elif status == 'failed' or not callback_context.get('success', True):
                 greeting = f"I ran into an issue with {cb_task}. {summary}" if summary else f"I ran into an issue with {cb_task}."
             elif call_type == "outbound_reminder":
                 message = callback_context.get('reminder') or callback_context.get('message') or cb_task
-                greeting = message  # Just the reminder message
+                greeting = message
             else:
                 greeting = f"{summary}" if summary else f"It's about {cb_task}."
         else:
             # Inbound call - full greeting
-            greeting = "Hey, what's up?"
+            greeting = "Hey, I'm your on-call engineer. What can I help you with?"
         
-        # Push greeting directly through sdk_bridge (this works!)
         logger.info(f"Sending greeting: {greeting}")
         await sdk_bridge.push_frame(TextFrame(text=greeting))
-        logger.info("Greeting sent, now connecting SDK session...")
-        
-        # Connect SDK in background while greeting plays
-        await session.connect()
-        logger.info("SDK session connected")
-        
-        # Mark session as ready so user input can be processed
-        sdk_bridge.mark_session_ready()
     
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
