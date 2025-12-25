@@ -397,10 +397,13 @@ async def run_sdk_pipeline(
         
         # Use task.queue_frames() to properly queue after pipeline starts
         # push_frame() fails because StartFrame hasn't been received yet
+        logger.info(f"Queuing greeting: {greeting}")
         await task.queue_frames([TextFrame(text=greeting)])
+        logger.info("Greeting queued, now connecting SDK session...")
         
         # Connect SDK in background while greeting plays
         await session.connect()
+        logger.info("SDK session connected")
         
         # Mark session as ready so user input can be processed
         sdk_bridge.mark_session_ready()
