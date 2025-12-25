@@ -79,6 +79,9 @@ class Settings(BaseSettings):
     # Encryption key for storing user credentials
     ENCRYPTION_KEY: str | None = None  # 32-byte key for Fernet encryption
 
+    # Zep Memory (knowledge graph for conversation memory)
+    ZEP_API_KEY: str | None = None  # Required for Zep memory features
+
 
 @lru_cache
 def get_settings() -> Settings:

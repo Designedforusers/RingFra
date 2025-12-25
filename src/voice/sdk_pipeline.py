@@ -50,6 +50,7 @@ from pipecat.observers.loggers.transcription_log_observer import TranscriptionLo
 
 from src.config import settings
 from src.agent.sdk_client import VoiceAgentSession
+from src.db.zep_memory import ZepSession
 
 
 class SDKBridgeProcessor(FrameProcessor):
@@ -101,15 +102,23 @@ class SDKBridgeProcessor(FrameProcessor):
         "Working through it...",
     ]
     
-    def __init__(self, session: VoiceAgentSession, end_call_callback=None, is_callback: bool = False):
+    def __init__(
+        self,
+        session: VoiceAgentSession,
+        zep_session: ZepSession | None = None,
+        end_call_callback=None,
+        is_callback: bool = False,
+    ):
         super().__init__()
         self.session = session
+        self.zep_session = zep_session
         self._processing = False
         self._end_call_callback = end_call_callback
         self._session_ready = asyncio.Event()  # Set when SDK session is connected
         self._is_callback = is_callback  # Skip greeting for callbacks (Twilio already greeted)
         self._long_op_task: asyncio.Task | None = None  # For streaming fillers
         self._current_query_task: asyncio.Task | None = None  # Track current SDK query for interruption
+        self._last_user_message: str | None = None  # Track for Zep persistence
     
     def mark_session_ready(self):
         """Called when SDK session is connected and ready."""
@@ -209,6 +218,7 @@ class SDKBridgeProcessor(FrameProcessor):
     async def _process_user_input(self, text: str):
         """Send user input to SDK and stream response to TTS."""
         logger.info(f"User said: {text}")
+        self._last_user_message = text  # Track for Zep persistence
         
         # Check for goodbye first - compress before ending
         if self._is_goodbye(text):
@@ -257,9 +267,12 @@ class SDKBridgeProcessor(FrameProcessor):
         
         try:
             first_response = True
+            response_chunks = []  # Collect for Zep persistence
             logger.info(f"Starting SDK query for: {text[:50]}...")
             async for response_text in self.session.query(text):
                 if response_text:
+                    response_chunks.append(response_text)
+                    
                     # On first SDK response, cancel long-op fillers
                     if first_response:
                         self._cancel_long_op_filler()
@@ -271,6 +284,11 @@ class SDKBridgeProcessor(FrameProcessor):
             
             # Signal end of response
             await self.push_frame(LLMFullResponseEndFrame())
+            
+            # Persist turn to Zep (async, doesn't block TTS)
+            if self.zep_session and response_chunks:
+                full_response = " ".join(response_chunks)
+                asyncio.create_task(self._persist_to_zep(text, full_response))
         
         except asyncio.CancelledError:
             # User interrupted - this is expected
@@ -282,6 +300,20 @@ class SDKBridgeProcessor(FrameProcessor):
             logger.error(f"SDK query error: {e}")
             await self.push_frame(TextFrame(text="I encountered an error. Please try again."))
             await self.push_frame(LLMFullResponseEndFrame())
+    
+    async def _persist_to_zep(self, user_message: str, assistant_message: str):
+        """Persist conversation turn to Zep (background task)."""
+        if not self.zep_session:
+            return
+        
+        try:
+            context = await self.zep_session.persist_turn(user_message, assistant_message)
+            if context:
+                # Update SDK session with new context for next turn
+                self.session.update_zep_context(context)
+                logger.debug(f"Zep context updated ({len(context)} chars)")
+        except Exception as e:
+            logger.warning(f"Failed to persist to Zep: {e}")
 
 
 async def run_sdk_pipeline(
@@ -325,6 +357,17 @@ async def run_sdk_pipeline(
         caller_phone=caller_phone,
     )
     
+    # === Zep Memory Session (real-time persistence) ===
+    zep_session: ZepSession | None = None
+    if settings.ZEP_API_KEY and caller_phone:
+        # Use phone as user_id for Zep (consistent across calls)
+        zep_user_id = f"phone:{caller_phone}"
+        zep_session = ZepSession(
+            user_id=zep_user_id,
+            call_sid=call_sid,
+            phone=caller_phone,
+        )
+    
     # === Twilio Transport ===
     serializer = TwilioFrameSerializer(
         stream_sid=stream_sid,
@@ -365,7 +408,11 @@ async def run_sdk_pipeline(
     
     # === SDK Bridge (connects Pipecat to Claude Agent SDK) ===
     is_callback = call_type.startswith("outbound_")
-    sdk_bridge = SDKBridgeProcessor(session=session, is_callback=is_callback)
+    sdk_bridge = SDKBridgeProcessor(
+        session=session,
+        zep_session=zep_session,
+        is_callback=is_callback,
+    )
     
     # === Pipeline ===
     # SDK bridge outputs TextFrames which TTS converts to audio
@@ -399,7 +446,18 @@ async def run_sdk_pipeline(
     async def on_client_connected(transport, client):
         logger.info("Client connected - connecting SDK session first...")
         
-        # Connect SDK FIRST - this takes ~4 seconds but Twilio already said
+        # Start Zep session (warms cache, loads previous context) - run in parallel with SDK connect
+        zep_context = None
+        if zep_session:
+            try:
+                zep_context = await zep_session.start()
+                if zep_context:
+                    logger.info(f"Zep context loaded ({len(zep_context)} chars)")
+                    session.set_initial_zep_context(zep_context)
+            except Exception as e:
+                logger.warning(f"Zep session start failed: {e}")
+        
+        # Connect SDK - this takes ~4 seconds but Twilio already said
         # "Connecting you to the Render infrastructure assistant" so user knows to wait
         await session.connect()
         logger.info("SDK session connected")

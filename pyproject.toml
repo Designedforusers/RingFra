@@ -25,6 +25,8 @@ dependencies = [
     # Database
     "asyncpg>=0.29.0",
     "cryptography>=42.0.0",
+    # Memory
+    "zep-cloud>=2.0.0",
 ]
 
 [project.optional-dependencies]

@@ -427,6 +427,7 @@ async def update_user_memory_tool(args: dict[str, Any]) -> dict[str, Any]:
 def get_sdk_options(
     user_context: dict | None = None,
     cwd: Path | None = None,
+    zep_context: str | None = None,
 ) -> ClaudeAgentOptions:
     """
     Build ClaudeAgentOptions for the voice agent session.
@@ -488,8 +489,8 @@ def get_sdk_options(
         tools=proactive_tools,
     )
     
-    # Build system prompt
-    system_prompt = _build_system_prompt(user_context)
+    # Build system prompt with Zep context
+    system_prompt = _build_system_prompt(user_context, zep_context)
     
     # MCP servers configuration
     mcp_servers = {
@@ -606,8 +607,8 @@ def get_sdk_options(
     )
 
 
-def _build_system_prompt(user_context: dict | None) -> str:
-    """Build the system prompt with user context."""
+def _build_system_prompt(user_context: dict | None, zep_context: str | None = None) -> str:
+    """Build the system prompt with user context and Zep memory."""
     
     base_prompt = """You are an expert on-call engineer accessible via phone. You help users manage their code and infrastructure through voice commands.
 
@@ -663,6 +664,15 @@ Update the user's CLAUDE.md (via update_user_memory tool) when you learn:
 Do this automatically without asking - be concise, use bullet points.
 """
     
+    # Add Zep memory context if available (from previous conversations)
+    if zep_context:
+        base_prompt += f"""
+## Memory from Previous Conversations
+The following context is from your previous conversations with this user. Use it to provide personalized, context-aware responses:
+
+{zep_context}
+"""
+    
     if not user_context:
         return base_prompt
     
@@ -704,6 +714,7 @@ class VoiceAgentSession:
     - Message streaming for TTS
     - Interrupt handling
     - User context injection
+    - Zep memory context updates
     
     Usage:
         async with VoiceAgentSession(user_context) as session:
@@ -721,9 +732,22 @@ class VoiceAgentSession:
         self.user_context = user_context
         self.cwd = cwd
         self.caller_phone = caller_phone
+        self._zep_context: str | None = None  # Zep context block for system prompt
         self.options = get_sdk_options(user_context, cwd)
         self.client: ClaudeSDKClient | None = None
         self._connected = False
+    
+    def set_initial_zep_context(self, context: str) -> None:
+        """Set initial Zep context before connecting."""
+        self._zep_context = context
+        # Rebuild options with Zep context included
+        self.options = get_sdk_options(self.user_context, self.cwd, self._zep_context)
+    
+    def update_zep_context(self, context: str) -> None:
+        """Update Zep context after a turn (for next query)."""
+        self._zep_context = context
+        # Note: SDK maintains conversation history internally, so we don't need
+        # to update options mid-session. The context is used for reference.
     
     async def connect(self) -> None:
         """Connect to Claude Agent SDK."""

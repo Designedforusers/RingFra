@@ -14,10 +14,11 @@ Phone Call → Twilio → Pipecat (STT/TTS) → Claude Agent SDK
 ```
 
 ## Key Files
-- `src/voice/sdk_pipeline.py` - Pipecat pipeline, STT/TTS, greeting flow
+- `src/voice/sdk_pipeline.py` - Pipecat pipeline, STT/TTS, greeting flow, Zep integration
 - `src/voice/handlers.py` - Twilio webhooks, call routing
 - `src/agent/sdk_client.py` - Claude Agent SDK session, tools, system prompt
-- `src/db/memory.py` - Session memory persistence
+- `src/db/zep_memory.py` - Zep Cloud integration for real-time memory
+- `src/db/memory.py` - Postgres session memory (backup)
 - `src/tasks/worker.py` - ARQ background worker
 
 ## Commands
@@ -45,10 +46,17 @@ ruff check src/
 ## Memory Architecture
 | Layer | Storage | Purpose |
 |-------|---------|---------|
-| Postgres summary | `session_memory.summary` | Rolling conversation context (injected into system prompt) |
+| **Zep** | Zep Cloud | Real-time message persistence, knowledge graph, P95 < 200ms retrieval |
+| Postgres summary | `session_memory.summary` | Backup rolling context (compression on goodbye) |
 | CLAUDE.md | User's repo directory | Stable user preferences (SDK reads via `setting_sources=["project"]`) |
 | update_user_memory tool | Writes to user's CLAUDE.md | Agent auto-updates when it learns preferences/patterns |
-| Zep (planned) | Zep Cloud | Real-time message persistence, handles abrupt hangups |
+
+### Zep Integration (`src/db/zep_memory.py`)
+- **User ID**: `phone:{caller_phone}` - consistent across all calls from same number
+- **Thread ID**: `call-{call_sid}` - one thread per call
+- **On call start**: `zep_session.start()` warms cache + loads previous context
+- **After each turn**: `persist_turn()` with `return_context=True` for single-call persistence + context update
+- **Abrupt hangup safe**: Messages persisted immediately, not just on goodbye
 
 ## Code Style
 - Async everywhere (asyncio)
