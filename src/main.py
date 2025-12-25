@@ -185,6 +185,20 @@ async def api_info():
     }
 
 
+@app.post("/admin/create-user")
+async def create_test_user(request: Request):
+    """Create a test user by phone number."""
+    from src.db.users import get_or_create_user
+    
+    data = await request.json()
+    phone = data.get("phone")
+    if not phone:
+        return {"error": "phone required"}
+    
+    user = await get_or_create_user(phone)
+    return {"user": user, "message": "User created/found"}
+
+
 if __name__ == "__main__":
     import uvicorn
 
