@@ -47,6 +47,7 @@ ruff check src/
 |-------|---------|---------|
 | Postgres summary | `session_memory.summary` | Rolling conversation context (injected into system prompt) |
 | CLAUDE.md | User's repo directory | Stable user preferences (SDK reads via `setting_sources=["project"]`) |
+| update_user_memory tool | Writes to user's CLAUDE.md | Agent auto-updates when it learns preferences/patterns |
 | Zep (planned) | Zep Cloud | Real-time message persistence, handles abrupt hangups |
 
 ## Code Style

@@ -344,6 +344,86 @@ async def cleanup_task_tool(args: dict[str, Any]) -> dict[str, Any]:
         }
 
 
+@tool("update_user_memory", "Update the user's CLAUDE.md with important information to remember. Use this when you learn user preferences, project patterns, or important context that should persist. Be concise - add bullet points, not paragraphs.", {
+    "section": str,  # Section header like "Preferences", "Projects", "Workflows"
+    "content": str,  # Content to add (will be appended as bullet points)
+})
+async def update_user_memory_tool(args: dict[str, Any]) -> dict[str, Any]:
+    """Update user's CLAUDE.md file with new information."""
+    from pathlib import Path
+    import aiofiles
+    
+    ctx = _get_session_context()
+    user_context = ctx.get("user_context", {})
+    
+    # Get working directory (user's repo)
+    repos = user_context.get("repos", [])
+    if not repos or not repos[0].get("local_path"):
+        return {
+            "content": [{"type": "text", "text": "No user repo configured - memory not saved to file."}],
+        }
+    
+    repo_path = Path(repos[0]["local_path"])
+    claude_md_path = repo_path / "CLAUDE.md"
+    
+    section = args["section"]
+    new_content = args["content"]
+    
+    try:
+        # Read existing content or start fresh
+        if claude_md_path.exists():
+            async with aiofiles.open(claude_md_path, "r") as f:
+                existing = await f.read()
+        else:
+            existing = "# User Memory\n\nThis file is automatically updated by your voice agent.\n"
+        
+        # Check if section exists
+        section_header = f"## {section}"
+        if section_header in existing:
+            # Append to existing section (before next ## or end of file)
+            lines = existing.split("\n")
+            new_lines = []
+            in_section = False
+            content_added = False
+            
+            for line in lines:
+                if line.strip() == section_header:
+                    in_section = True
+                    new_lines.append(line)
+                elif line.startswith("## ") and in_section:
+                    # End of our section, add content before next section
+                    if not content_added:
+                        new_lines.append(f"- {new_content}")
+                        content_added = True
+                    in_section = False
+                    new_lines.append(line)
+                else:
+                    new_lines.append(line)
+            
+            # If section was last, add at end
+            if in_section and not content_added:
+                new_lines.append(f"- {new_content}")
+            
+            updated = "\n".join(new_lines)
+        else:
+            # Add new section at end
+            updated = existing.rstrip() + f"\n\n{section_header}\n- {new_content}\n"
+        
+        # Write back
+        async with aiofiles.open(claude_md_path, "w") as f:
+            await f.write(updated)
+        
+        return {
+            "content": [{"type": "text", "text": f"Memory updated: added to {section}"}],
+        }
+    except Exception as e:
+        logger.error(f"Failed to update CLAUDE.md: {e}")
+        return {
+            "content": [{"type": "text", "text": f"Couldn't save to memory file: {e}"}],
+            "is_error": True,
+        }
+
+
 def get_sdk_options(
     user_context: dict | None = None,
     cwd: Path | None = None,
@@ -391,6 +471,7 @@ def get_sdk_options(
         schedule_callback_tool,
         send_sms_tool,
         set_reminder_tool,
+        update_user_memory_tool,  # Always available for memory persistence
     ]
     
     # Add repo management tools in multi-tenant (production) mode
@@ -503,6 +584,7 @@ def get_sdk_options(
             "mcp__proactive__schedule_callback",
             "mcp__proactive__send_sms",
             "mcp__proactive__set_reminder",
+            "mcp__proactive__update_user_memory",
         ] + (
             # Repo management tools (production mode only)
             [
@@ -572,6 +654,13 @@ gh pr merge --squash --delete-branch
 - Run tests before pushing: pytest, npm test, go test
 - Use conventional commits: fix:, feat:, refactor:
 - The `gh` CLI is authenticated and ready to use
+
+## Memory
+Update the user's CLAUDE.md (via update_user_memory tool) when you learn:
+- User preferences ("prefers concise responses", "always runs lint before commit")
+- Project patterns ("uses pytest for tests", "main branch is production")
+- Important context ("primary repo is PhoneFix", "uses Render for hosting")
+Do this automatically without asking - be concise, use bullet points.
 """
     
     if not user_context:
