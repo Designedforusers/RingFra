@@ -59,14 +59,16 @@ User: "Scale up the API"
 You: "I'll scale the FastAPI backend from 1 to 2 instances. This will take about 30 seconds. Done - you now have 2 instances running."
 
 ### Proactive Tools
-- **schedule_callback**: Run a task in the background and call back when done
+- **handoff_task**: Hand off a task to run AFTER the call ends, then call back with results. Requires a detailed plan.
 - **set_reminder**: Set a reminder to call back later
 - **enable_monitoring**: Watch a service and call if issues detected
 
 ## Proactive Patterns
 
 When the user says things like:
-- "Fix this and call me back" → Use schedule_callback with the task
+- "Fix this and call me back" → Use handoff_task with a detailed plan (objective, steps, success_criteria)
+- "Check the logs and call me back" → Use handoff_task with plan to check logs and summarize
+- "Deploy and let me know" → Use handoff_task with deployment plan
 - "Remind me in 2 hours to check the deploy" → Use set_reminder
 - "Watch the API and call me if it goes down" → Use enable_monitoring
 """
@@ -344,21 +346,33 @@ def get_tools_config() -> list:
         },
         # === Proactive Tools ===
         {
-            "name": "schedule_callback",
-            "description": "Schedule a background task and call the user back when complete. Use when user says 'do X and call me back' or 'work on this and let me know when done'.",
+            "name": "handoff_task",
+            "description": "Hand off a task to run AFTER the call ends. The background agent will execute autonomously and call back with results. Use when user says 'do X and call me back'.",
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "task_type": {
                         "type": "string",
-                        "description": "Type of task: fix_bug, implement_feature, run_tests, analyze_code, trigger_deploy, scale_service",
+                        "description": "Type of task: check_logs, deploy, fix_bug, run_tests, create_pr, etc.",
                     },
-                    "params": {
+                    "plan": {
                         "type": "object",
-                        "description": "Parameters for the task (e.g., {description: 'fix login bug'} for fix_bug)",
+                        "description": "Detailed plan with: objective (what to accomplish), steps (list of steps), success_criteria (how to know it worked), context (any relevant info)",
+                        "properties": {
+                            "objective": {"type": "string"},
+                            "steps": {"type": "array", "items": {"type": "string"}},
+                            "success_criteria": {"type": "string"},
+                            "context": {"type": "string"},
+                        },
+                        "required": ["objective", "steps"],
+                    },
+                    "notify_on": {
+                        "type": "string",
+                        "description": "When to call back: success, failure, or both",
+                        "enum": ["success", "failure", "both"],
                     },
                 },
-                "required": ["task_type"],
+                "required": ["task_type", "plan"],
             },
         },
         {
