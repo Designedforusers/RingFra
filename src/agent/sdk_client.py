@@ -515,6 +515,10 @@ def get_sdk_options(
         # Enable partial message streaming for TTS
         include_partial_messages=True,
         
+        # Enable Claude Code filesystem-based configuration
+        # This allows SDK to read CLAUDE.md from user's working directory
+        setting_sources=["project"],
+        
         # Enable file checkpointing so we can rewind changes
         # enable_file_checkpointing=True,  # Uncomment when needed
     )
