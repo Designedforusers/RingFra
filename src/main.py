@@ -57,7 +57,7 @@ async def lifespan(app: FastAPI):
             from src.tasks.worker import WorkerSettings
             
             # Create worker instance and run it as a task
-            redis_settings = WorkerSettings.redis_settings()
+            redis_settings = WorkerSettings.redis_settings
             worker = Worker(
                 functions=WorkerSettings.functions,
                 cron_jobs=WorkerSettings.cron_jobs,
