@@ -33,7 +33,6 @@ from pipecat.frames.frames import (
     TranscriptionFrame,
     EndFrame,
     LLMFullResponseEndFrame,
-    StartInterruptionFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
@@ -214,10 +213,10 @@ class SDKBridgeProcessor(FrameProcessor):
             first_response = True
             async for response_text in self.session.query(text):
                 if response_text:
-                    # On first SDK response, cancel fillers and interrupt any playing TTS
+                    # On first SDK response, cancel long-op fillers
+                    # No interruption needed - Pipecat queues TTS sequentially
                     if first_response:
                         self._cancel_long_op_filler()
-                        await self.push_frame(StartInterruptionFrame())
                         first_response = False
                     
                     # Send TextFrame to TTS - Pipecat will handle conversion
