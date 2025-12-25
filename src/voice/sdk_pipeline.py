@@ -215,7 +215,7 @@ class SDKBridgeProcessor(FrameProcessor):
         # Send filler IMMEDIATELY to eliminate awkward silence
         filler = self._get_contextual_filler(text)
         await self.push_frame(TextFrame(text=filler))
-        logger.debug(f"Sent filler: {filler}")
+        logger.info(f"Sent filler: {filler}")
         
         # Start long-operation filler task (will send more fillers after 10s)
         self._long_op_task = asyncio.create_task(self._stream_long_operation_fillers())
@@ -232,7 +232,9 @@ class SDKBridgeProcessor(FrameProcessor):
         
         try:
             first_response = True
+            logger.info(f"Starting SDK query for: {text[:50]}...")
             async for response_text in self.session.query(text):
+                logger.info(f"Got response_text: {repr(response_text)[:100]}")
                 if response_text:
                     # On first SDK response, cancel long-op fillers
                     # No interruption needed - Pipecat queues TTS sequentially
@@ -242,7 +244,7 @@ class SDKBridgeProcessor(FrameProcessor):
                     
                     # Send TextFrame to TTS - Pipecat will handle conversion
                     await self.push_frame(TextFrame(text=response_text))
-                    logger.debug(f"SDK response chunk: {response_text[:50]}...")
+                    logger.info(f"SDK response chunk: {response_text[:50]}...")
             
             # Signal end of response
             await self.push_frame(LLMFullResponseEndFrame())
