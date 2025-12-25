@@ -220,12 +220,8 @@ class WorkerSettings:
         cron(check_service_health, minute={0, 15, 30, 45}),
     ]
 
-    # Redis connection
-    @staticmethod
-    def redis_settings() -> RedisSettings:
-        if not settings.REDIS_URL:
-            raise ValueError("REDIS_URL not configured")
-        return RedisSettings.from_dsn(settings.REDIS_URL)
+    # Redis connection - must be a class attribute, not a method
+    redis_settings = RedisSettings.from_dsn(settings.REDIS_URL) if settings.REDIS_URL else None
 
     # Worker settings
     max_jobs = 10
