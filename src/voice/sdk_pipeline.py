@@ -33,6 +33,7 @@ from pipecat.frames.frames import (
     TranscriptionFrame,
     EndFrame,
     LLMFullResponseEndFrame,
+    StartInterruptionFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
@@ -108,6 +109,7 @@ class SDKBridgeProcessor(FrameProcessor):
         self._session_ready = asyncio.Event()  # Set when SDK session is connected
         self._is_callback = is_callback  # Skip greeting for callbacks (Twilio already greeted)
         self._long_op_task: asyncio.Task | None = None  # For streaming fillers
+        self._current_query_task: asyncio.Task | None = None  # Track current SDK query for interruption
     
     def mark_session_ready(self):
         """Called when SDK session is connected and ready."""
@@ -160,11 +162,39 @@ class SDKBridgeProcessor(FrameProcessor):
             self._long_op_task.cancel()
             self._long_op_task = None
     
+    async def _handle_interruption(self):
+        """Handle user interruption - stop SDK execution."""
+        logger.info("User interrupted - stopping SDK execution")
+        
+        # Cancel long-op fillers
+        self._cancel_long_op_filler()
+        
+        # Cancel the current query task if running
+        if self._current_query_task and not self._current_query_task.done():
+            self._current_query_task.cancel()
+            self._current_query_task = None
+        
+        # Tell SDK to interrupt (stops tool execution, etc.)
+        if self._session_ready.is_set():
+            try:
+                await self.session.interrupt()
+                logger.info("SDK interrupt sent successfully")
+            except Exception as e:
+                logger.warning(f"SDK interrupt failed (may already be idle): {e}")
+        
+        # Reset processing flag so next transcription can be processed
+        self._processing = False
+    
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         """Process incoming frames."""
         await super().process_frame(frame, direction)
         
-        if isinstance(frame, TranscriptionFrame):
+        if isinstance(frame, StartInterruptionFrame):
+            # User is interrupting (barge-in) - stop Claude immediately
+            await self._handle_interruption()
+            # Still pass the frame through so Pipecat can stop TTS
+            await self.push_frame(frame, direction)
+        elif isinstance(frame, TranscriptionFrame):
             # User finished speaking - process with SDK
             if frame.text and not self._processing:
                 self._processing = True
@@ -248,6 +278,12 @@ class SDKBridgeProcessor(FrameProcessor):
             
             # Signal end of response
             await self.push_frame(LLMFullResponseEndFrame())
+        
+        except asyncio.CancelledError:
+            # User interrupted - this is expected, don't treat as error
+            self._cancel_long_op_filler()
+            logger.info("SDK query cancelled due to user interruption")
+            # Don't push error frame - user interrupted intentionally
             
         except Exception as e:
             self._cancel_long_op_filler()
