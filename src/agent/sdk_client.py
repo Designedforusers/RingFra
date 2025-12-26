@@ -834,6 +834,9 @@ class VoiceAgentSession:
 
         await self.client.query(prompt)
 
+        # Track if we've given any progress update to avoid repeating
+        announced_actions = set()
+        
         async for message in self.client.receive_response():
             # Extract text from AssistantMessage
             if isinstance(message, AssistantMessage):
@@ -843,13 +846,15 @@ class VoiceAgentSession:
                         if text:
                             yield text
                     elif isinstance(block, ToolUseBlock):
-                        # Optionally announce tool usage
+                        # Announce tool usage so user knows we're working
                         tool_name = block.name
-                        if tool_name.startswith("mcp__render__"):
-                            # Don't announce every MCP call, too noisy
-                            pass
-                        else:
-                            logger.debug(f"Tool called: {tool_name}")
+                        logger.debug(f"Tool called: {tool_name}")
+                        
+                        # Generate user-friendly progress messages for key operations
+                        progress_msg = self._get_tool_progress_message(tool_name, block.input, announced_actions)
+                        if progress_msg:
+                            announced_actions.add(progress_msg)  # Don't repeat same message
+                            yield progress_msg
 
             # ResultMessage indicates completion
             elif isinstance(message, ResultMessage):
@@ -862,6 +867,86 @@ class VoiceAgentSession:
         if self.client and self._connected:
             await self.client.interrupt()
             logger.info("VoiceAgentSession interrupted")
+
+    def _get_tool_progress_message(
+        self, 
+        tool_name: str, 
+        tool_input: dict | None,
+        announced: set[str]
+    ) -> str | None:
+        """
+        Generate a user-friendly progress message for tool usage.
+        
+        Returns None if this action shouldn't be announced (too noisy or already announced).
+        """
+        # Map tool names to friendly messages
+        # Only announce significant actions, not every MCP call
+        
+        # Render MCP operations
+        if tool_name == "mcp__render__list_logs":
+            return "Checking the logs..."
+        elif tool_name == "mcp__render__list_services":
+            if "Checking your services..." not in announced:
+                return "Checking your services..."
+            return None
+        elif tool_name == "mcp__render__get_metrics":
+            return "Getting metrics..."
+        elif tool_name == "mcp__render__list_deploys":
+            return "Checking deployments..."
+        elif tool_name == "mcp__render__get_deploy":
+            return "Getting deployment details..."
+        elif tool_name == "mcp__render__list_workspaces":
+            if "Setting up..." not in announced:
+                return "Setting up..."
+            return None
+        elif tool_name == "mcp__render__select_workspace":
+            # Don't announce workspace selection, it's internal setup
+            return None
+        
+        # Proactive tools
+        elif tool_name == "mcp__proactive__set_reminder":
+            return "Scheduling that for you..."
+        elif tool_name == "mcp__proactive__send_sms":
+            return "Sending you a text..."
+        
+        # Git/bash operations
+        elif tool_name == "Bash":
+            # Try to detect what bash is doing from input
+            if tool_input and isinstance(tool_input, dict):
+                command = tool_input.get("command", "")
+                if "git" in command:
+                    if "push" in command:
+                        return "Pushing to GitHub..."
+                    elif "commit" in command:
+                        return "Committing changes..."
+                    elif "pull" in command:
+                        return "Pulling latest changes..."
+                    elif "checkout" in command or "switch" in command:
+                        return "Switching branches..."
+                    elif "status" in command or "diff" in command or "log" in command:
+                        # Don't announce read-only git operations
+                        return None
+                elif "gh pr" in command:
+                    if "create" in command:
+                        return "Creating a pull request..."
+                    elif "merge" in command:
+                        return "Merging the PR..."
+                elif "pytest" in command or "test" in command:
+                    return "Running tests..."
+                elif "npm" in command or "yarn" in command or "pip" in command:
+                    return "Installing dependencies..."
+            return None
+        
+        # File operations - don't announce, too noisy
+        elif tool_name in ("Read", "Edit", "MultiEdit", "Create", "Grep", "Glob", "LS"):
+            return None
+        
+        # Handoff task
+        elif tool_name == "handoff_task":
+            return "I'll handle that in the background..."
+        
+        # Default: don't announce unknown tools
+        return None
 
     async def compress_and_save_memory(self) -> str | None:
         """
