@@ -1,6 +1,6 @@
 [project]
 name = "render-voice-agent"
-version = "1.0.0"
+version = "1.0.1"  # Bump to force Docker rebuild with claude-agent-sdk
 description = "Voice-controlled infrastructure management for Render"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -9,7 +9,7 @@ dependencies = [
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",
     "pipecat-ai[silero,deepgram,cartesia,anthropic,twilio]>=0.0.98",
-    "claude-agent-sdk>=0.1.0",
+    "claude-agent-sdk>=0.1.18",
     "httpx>=0.25.0",
     "pydantic-settings>=2.0.0",
     "loguru>=0.7.0",
