@@ -26,9 +26,15 @@ from src.voice.pipeline import run_pipeline as run_pipecat_pipeline, set_session
 try:
     from src.voice.sdk_pipeline import run_sdk_pipeline
     SDK_AVAILABLE = True
-except ImportError:
+    logger.info("SDK pipeline loaded successfully")
+except ImportError as e:
     SDK_AVAILABLE = False
     run_sdk_pipeline = None
+    logger.error(f"Failed to import SDK pipeline: {e}")
+except Exception as e:
+    SDK_AVAILABLE = False
+    run_sdk_pipeline = None
+    logger.error(f"Unexpected error importing SDK pipeline: {e}")
 
 # Import Sentry for error capture if available
 try:
