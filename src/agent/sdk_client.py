@@ -31,7 +31,6 @@ from claude_agent_sdk import (
     ClaudeAgentOptions,
     ClaudeSDKClient,
     ResultMessage,
-    StreamEvent,
     TextBlock,
     ToolUseBlock,
     create_sdk_mcp_server,
@@ -823,6 +822,9 @@ class VoiceAgentSession:
         get results, and continue. We yield text as it arrives
         for streaming to TTS.
         
+        Uses partial messages (include_partial_messages=True) to stream
+        text incrementally as Claude generates it.
+        
         Args:
             prompt: User's voice input (transcribed)
             
@@ -839,42 +841,38 @@ class VoiceAgentSession:
         # Latency tracking
         query_start = time.monotonic()
         first_text_time: float | None = None
-        stream_event_count = 0
         text_chunks = 0
+        
+        # Track text we've already yielded to avoid duplicates
+        # (partial messages may overlap with final message)
+        yielded_text_length = 0
 
         async for message in self.client.receive_response():
-            # StreamEvent = real-time text deltas (lowest latency)
-            # Claude's natural "Let me check that" streams here immediately
-            if isinstance(message, StreamEvent):
-                stream_event_count += 1
-                event = message.event
-                # Handle content_block_delta with text_delta
-                if event.get("type") == "content_block_delta":
-                    delta = event.get("delta", {})
-                    if delta.get("type") == "text_delta":
-                        text = delta.get("text", "")
-                        if text:
+            # AssistantMessage - with include_partial_messages=True, we get
+            # these incrementally as Claude generates text
+            if isinstance(message, AssistantMessage):
+                for block in message.content:
+                    if isinstance(block, TextBlock):
+                        text = block.text
+                        # Only yield new text we haven't seen yet
+                        if len(text) > yielded_text_length:
+                            new_text = text[yielded_text_length:]
+                            yielded_text_length = len(text)
+                            
                             if first_text_time is None:
                                 first_text_time = time.monotonic()
                                 latency_ms = (first_text_time - query_start) * 1000
-                                logger.info(f"[LATENCY] First text via StreamEvent: {latency_ms:.0f}ms")
+                                logger.info(f"[LATENCY] First text: {latency_ms:.0f}ms")
+                            
                             text_chunks += 1
-                            yield text
-            
-            # AssistantMessage = complete message (fallback, higher latency)
-            elif isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, TextBlock):
-                        # Only yield if we didn't already stream this via StreamEvent
-                        # StreamEvent gives us the text incrementally, so skip here
-                        pass
+                            yield new_text
                     elif isinstance(block, ToolUseBlock):
                         logger.debug(f"Tool called: {block.name}")
 
             # ResultMessage indicates completion
             elif isinstance(message, ResultMessage):
                 total_time = (time.monotonic() - query_start) * 1000
-                logger.info(f"[LATENCY] Query complete: {total_time:.0f}ms total, {stream_event_count} StreamEvents, {text_chunks} text chunks")
+                logger.info(f"[LATENCY] Query complete: {total_time:.0f}ms total, {text_chunks} text chunks")
                 if message.is_error:
                     yield f"I encountered an error: {message.result or 'Unknown error'}"
                 logger.info(f"Query completed. Turns: {message.num_turns}, Cost: ${message.total_cost_usd or 0:.4f}")
