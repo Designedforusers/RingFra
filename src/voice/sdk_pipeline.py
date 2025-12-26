@@ -22,6 +22,7 @@ Architecture:
 
 import asyncio
 import random
+import time
 from pathlib import Path
 
 from fastapi import WebSocket
@@ -220,6 +221,9 @@ class SDKBridgeProcessor(FrameProcessor):
         logger.info(f"User said: {text}")
         self._last_user_message = text  # Track for Zep persistence
         
+        # Start timing from when user finished speaking
+        user_done_time = time.monotonic()
+        
         # Check for goodbye first - compress before ending
         if self._is_goodbye(text):
             logger.info("User said goodbye - compressing session and ending call")
@@ -273,8 +277,10 @@ class SDKBridgeProcessor(FrameProcessor):
                 if response_text:
                     response_chunks.append(response_text)
                     
-                    # On first SDK response, cancel long-op fillers
+                    # On first SDK response, cancel long-op fillers and log E2E latency
                     if first_response:
+                        e2e_latency = (time.monotonic() - user_done_time) * 1000
+                        logger.info(f"[LATENCY] End-to-end (user done -> first TTS): {e2e_latency:.0f}ms")
                         self._cancel_long_op_filler()
                         first_response = False
                     

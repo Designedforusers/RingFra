@@ -21,6 +21,7 @@ The SDK handles:
 # === Session Context (for tools to access) ===
 # Uses contextvars for async-safe, per-task isolation.
 # This allows multiple concurrent calls without context bleeding.
+import time
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -835,10 +836,17 @@ class VoiceAgentSession:
 
         await self.client.query(prompt)
 
+        # Latency tracking
+        query_start = time.monotonic()
+        first_text_time: float | None = None
+        stream_event_count = 0
+        text_chunks = 0
+
         async for message in self.client.receive_response():
             # StreamEvent = real-time text deltas (lowest latency)
             # Claude's natural "Let me check that" streams here immediately
             if isinstance(message, StreamEvent):
+                stream_event_count += 1
                 event = message.event
                 # Handle content_block_delta with text_delta
                 if event.get("type") == "content_block_delta":
@@ -846,6 +854,11 @@ class VoiceAgentSession:
                     if delta.get("type") == "text_delta":
                         text = delta.get("text", "")
                         if text:
+                            if first_text_time is None:
+                                first_text_time = time.monotonic()
+                                latency_ms = (first_text_time - query_start) * 1000
+                                logger.info(f"[LATENCY] First text via StreamEvent: {latency_ms:.0f}ms")
+                            text_chunks += 1
                             yield text
             
             # AssistantMessage = complete message (fallback, higher latency)
@@ -860,6 +873,8 @@ class VoiceAgentSession:
 
             # ResultMessage indicates completion
             elif isinstance(message, ResultMessage):
+                total_time = (time.monotonic() - query_start) * 1000
+                logger.info(f"[LATENCY] Query complete: {total_time:.0f}ms total, {stream_event_count} StreamEvents, {text_chunks} text chunks")
                 if message.is_error:
                     yield f"I encountered an error: {message.result or 'Unknown error'}"
                 logger.info(f"Query completed. Turns: {message.num_turns}, Cost: ${message.total_cost_usd or 0:.4f}")
