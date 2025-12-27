@@ -113,20 +113,44 @@ async def handoff_task_tool(args: dict[str, Any]) -> dict[str, Any]:
             "is_error": True,
         }
 
-    plan = args.get("plan", {})
-    if not plan.get("objective") or not plan.get("steps"):
-        return {
-            "content": [{"type": "text", "text": "Plan must include 'objective' and 'steps'. Please provide a detailed plan."}],
-            "is_error": True,
-        }
+    import json
+    plan_raw = args.get("plan", {})
+    
+    # Handle various formats Claude might send:
+    # 1. Proper dict - use as-is
+    # 2. JSON string - parse it
+    # 3. Plain text - wrap it in a structured dict
+    if isinstance(plan_raw, dict):
+        plan = plan_raw
+    elif isinstance(plan_raw, str):
+        # Try to parse as JSON first
+        try:
+            plan = json.loads(plan_raw)
+            if not isinstance(plan, dict):
+                plan = {"objective": str(plan), "steps": ["Execute the plan"]}
+        except json.JSONDecodeError:
+            # Plain text - extract what we can or wrap it
+            plan = {
+                "objective": plan_raw.split("\n")[0][:200],  # First line as objective
+                "steps": [line.strip() for line in plan_raw.split("\n") if line.strip()],
+                "raw_plan": plan_raw
+            }
+    else:
+        plan = {"objective": str(plan_raw), "steps": ["Execute the plan"]}
+    
+    # Ensure required fields exist
+    if not plan.get("objective"):
+        plan["objective"] = "Complete the requested task"
+    if not plan.get("steps"):
+        plan["steps"] = ["Execute the plan as described"]
 
     try:
-        # Save task to Postgres
+        # Save task to Postgres (asyncpg handles dict -> JSONB automatically)
         task_id = await create_background_task(
             user_id=user_id,
             phone=phone,
             task_type=args.get("task_type", "task"),
-            plan=plan,
+            plan=plan,  # Pass dict directly - asyncpg handles JSONB serialization
         )
 
         # Enqueue for background execution
