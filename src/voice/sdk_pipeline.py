@@ -235,7 +235,7 @@ class SDKBridgeProcessor(FrameProcessor):
         text_lower = text.lower()
         return any(phrase in text_lower for phrase in self.CALLBACK_PHRASES)
     
-    async def _schedule_fallback_callback(self):
+    async def _schedule_fallback_callback(self, user_request: str | None = None):
         """Schedule a safety-net callback when agent forgot to schedule one."""
         if not self._caller_phone:
             logger.warning("Cannot schedule fallback callback - no phone number")
@@ -244,9 +244,16 @@ class SDKBridgeProcessor(FrameProcessor):
         try:
             from src.tasks.queue import enqueue_reminder
             
+            # Include user's request in the callback context
+            if user_request:
+                truncated = user_request[:150] + "..." if len(user_request) > 150 else user_request
+                message = f"Following up on your request: {truncated}"
+            else:
+                message = "Following up on your earlier request. Is there anything else you need help with?"
+            
             await enqueue_reminder(
                 phone=self._caller_phone,
-                message="Following up on your earlier request. Is there anything else you need help with?",
+                message=message,
                 delay_seconds=300,  # 5 minutes
             )
             logger.info(f"Fallback callback scheduled for {self._caller_phone} in 5 minutes")
@@ -273,7 +280,7 @@ class SDKBridgeProcessor(FrameProcessor):
             # Safety net: schedule fallback callback if user requested one but agent forgot
             if self._callback_requested and not self._callback_scheduled:
                 logger.warning("Callback requested but not scheduled by agent - scheduling fallback")
-                await self._schedule_fallback_callback()
+                await self._schedule_fallback_callback(self._last_user_message)
             
             # Tell user we're saving (sets expectation for brief pause)
             await self.push_frame(TextFrame(text="Got it! Saving our conversation..."))

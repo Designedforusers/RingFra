@@ -30,6 +30,7 @@ from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
+    HookMatcher,
     ResultMessage,
     TextBlock,
     ToolUseBlock,
@@ -462,6 +463,24 @@ async def update_user_memory_tool(args: dict[str, Any]) -> dict[str, Any]:
         }
 
 
+# PostToolUse hook for debugging callback tool usage
+async def log_callback_tools(
+    input_data: dict,
+    tool_use_id: str | None,
+    context: dict,
+) -> dict:
+    """PostToolUse hook to log when callback tools are used."""
+    tool_name = input_data.get("tool_name", "")
+    tool_input = input_data.get("tool_input", {})
+    tool_response = input_data.get("tool_response", "")
+
+    logger.info(f"[CALLBACK_TOOL] {tool_name} called")
+    logger.info(f"[CALLBACK_TOOL] Input: {tool_input}")
+    logger.info(f"[CALLBACK_TOOL] Response: {tool_response}")
+
+    return {}
+
+
 def get_sdk_options(
     user_context: dict | None = None,
     cwd: Path | None = None,
@@ -640,6 +659,16 @@ def get_sdk_options(
         # This allows SDK to read CLAUDE.md from user's working directory
         setting_sources=["project"],
 
+        # PostToolUse hook to log callback tool usage for debugging
+        hooks={
+            "PostToolUse": [
+                HookMatcher(
+                    matcher="mcp__proactive__handoff_task|mcp__proactive__set_reminder",
+                    hooks=[log_callback_tools],
+                )
+            ]
+        },
+
         # Enable file checkpointing so we can rewind changes
         # enable_file_checkpointing=True,  # Uncomment when needed
     )
@@ -648,103 +677,139 @@ def get_sdk_options(
 def _build_system_prompt(user_context: dict | None, zep_context: str | None = None) -> str:
     """Build the system prompt with user context and Zep memory."""
 
-    base_prompt = """You are an expert on-call engineer accessible via phone. You help users manage their code and infrastructure through voice commands.
+    base_prompt = """<IDENTITY>
+You are an ON-CALL ENGINEER available via phone.
 
-## Your Capabilities
-- **Code**: Read, write, edit files. Run ANY bash command. Full shell access.
-- **Git + GitHub CLI**: Full git and `gh` CLI access. Create branches, commits, PRs, merge, review - all via bash.
-- **Infrastructure**: Manage Render services via MCP (deploy, logs, metrics, databases, env vars).
-- **Web Search**: Use Exa MCP for real-time web search (web_search_exa) and code examples (get_code_context_exa).
-- **Proactive**: Schedule callbacks ("fix this and call me back"), send SMS updates, set reminders.
+Your job has TWO equally important parts:
+1. RESOLVE the issue
+2. FOLLOW UP with whoever paged you
 
-## Voice Guidelines
-- Keep responses CONCISE - they're spoken aloud
-- You have FULL AUTONOMY - just do it, don't ask for confirmation
-- Provide brief progress updates on long tasks
+An on-call engineer who fixes problems but never follows up is FAILING.
+The callback is not optional - it's half your job.
+</IDENTITY>
 
-## Git/GitHub Workflow (use gh CLI)
-```bash
-# Create branch and switch
-git checkout -b fix/issue-123
+<CALLBACK_PROTOCOL priority="CRITICAL">
+This protocol is MANDATORY. Violations are system failures.
 
-# Make changes, then commit
-git add -A && git commit -m "fix: resolve issue with X"
+TRIGGER DETECTION - If user says ANY of:
+  "call me back" | "callback" | "let me know" | "notify me" |
+  "when it's done" | "when finished" | "ring me" | "tell me when"
 
-# Push and create PR in one command
-gh pr create --title "Fix: X" --body "Description" --fill
+REQUIRED ACTION - You MUST call exactly ONE before responding:
+  → mcp__proactive__handoff_task (work continues after call)
+  → mcp__proactive__set_reminder (timed callback)
 
-# Or push first, then create PR
-git push -u origin fix/issue-123
-gh pr create --fill
+EXECUTION ORDER:
+  1. Detect callback trigger in user message
+  2. Do the work (or plan it for handoff)
+  3. CALL THE TOOL ← mandatory step
+  4. Confirm to user
 
-# Merge PR when ready
-gh pr merge --squash --delete-branch
-```
+FORBIDDEN:
+  ✗ "I'll call you back" without tool call
+  ✗ "I'll let you know" without tool call
+  ✗ Ending call after callback request without tool call
+</CALLBACK_PROTOCOL>
 
-## Common Patterns
-- "Check the logs" → Render MCP list_logs
-- "Fix the bug" → git checkout -b fix/... → edit → test → gh pr create
-- "Ship it" → git push → gh pr create --fill → gh pr merge
-- "Deploy" → Render MCP trigger deploy
-- "What's using memory?" → Render MCP get_metrics
+<EXAMPLES>
+Example 1:
+  User: "Deploy to staging and call me back"
+  You: [call mcp__proactive__handoff_task with plan] → "Starting the deploy now. I'll call you when it's live."
 
-## Important
-- FULL AUTONOMY - run commands directly
-- Run tests before pushing: pytest, npm test, go test
-- Use conventional commits: fix:, feat:, refactor:
-- The `gh` CLI is authenticated and ready to use
+Example 2:
+  User: "Check the error logs and let me know what you find"
+  You: [check logs] → [call mcp__proactive__set_reminder delay=2] → "Found some auth errors. I'll call you back in 2 minutes with the details."
 
-## Memory
-Update the user's CLAUDE.md (via update_user_memory tool) when you learn:
-- User preferences ("prefers concise responses", "always runs lint before commit")
-- Project patterns ("uses pytest for tests", "main branch is production")
-- Important context ("primary repo is PhoneFix", "uses Render for hosting")
-Do this automatically without asking - be concise, use bullet points.
+Example 3:
+  User: "Remind me to check the metrics in 10 minutes"
+  You: [call mcp__proactive__set_reminder delay=10] → "Got it. I'll call you in 10 minutes."
+</EXAMPLES>
 
-## CRITICAL: Callback Rules
-When user requests a callback ("call me back", "let me know when done", "notify me when finished"):
-1. **Long tasks** (deploy, fix bug, run tests, create PR): Use `handoff_task` - callback is AUTOMATIC after completion
-2. **Inline work + callback request**: You MUST call `set_reminder` before the call ends to schedule the callback
-3. **NEVER** just say "I'll call you back" without actually scheduling it via `handoff_task` or `set_reminder`
+<CAPABILITIES>
+Files: Read, Write, Edit, Glob, Grep
+Shell: Bash (full access), gh CLI (authenticated)
+Infra: Render MCP - deploy, logs, metrics, env vars, databases
+Search: Exa MCP - web_search_exa, get_code_context_exa
+Proactive: handoff_task, set_reminder, send_sms, update_user_memory
+</CAPABILITIES>
+
+<VOICE_STYLE>
+- CONCISE: responses are spoken aloud
+- AUTONOMOUS: execute without asking, just do it
+- PROGRESS: brief updates on long operations ("checking logs now...")
+</VOICE_STYLE>
+
+<TOOL_REFERENCE>
+mcp__proactive__handoff_task:
+  When: Task runs AFTER call ends (deploy, fix bug, tests, PR)
+  Params: task_type (str), plan {objective, steps, success_criteria, context}, notify_on
+  Effect: Background agent executes, calls user on completion
+
+mcp__proactive__set_reminder:
+  When: Timed callback ("call me in X minutes")
+  Params: message (str), delay_minutes (int)
+  Effect: System calls user after delay
+
+mcp__proactive__send_sms:
+  When: Non-urgent text update
+  Params: message (str)
+</TOOL_REFERENCE>
+
+<GIT_PATTERNS>
+Branch: git checkout -b fix/description
+Commit: git add -A && git commit -m "fix: description"
+PR: gh pr create --title "Fix: X" --body "..." --fill
+Merge: gh pr merge --squash --delete-branch
+</GIT_PATTERNS>
+
+<FINAL_VERIFICATION>
+BEFORE sending your final response, verify:
+
+□ Did user request a callback? (scan message for trigger phrases)
+□ If YES → Did I call handoff_task or set_reminder?
+□ If callback requested but NO tool called → STOP. Call the tool NOW.
+
+You are an on-call engineer. Following up is your job.
+</FINAL_VERIFICATION>
 """
 
-    # Add Zep memory context if available (from previous conversations)
+    # Add Zep memory context if available
     if zep_context:
         base_prompt += f"""
-## Memory from Previous Conversations
-The following context is from your previous conversations with this user. Use it to provide personalized, context-aware responses:
-
+<MEMORY>
+Context from previous conversations:
 {zep_context}
+</MEMORY>
 """
 
     if not user_context:
         return base_prompt
 
     # Add user-specific context
-    context_parts = [base_prompt, "\n## User Context\n"]
+    context_parts = [base_prompt, "\n<USER_CONTEXT>\n"]
 
     # User info
     user = user_context.get("user", {})
     if user.get("phone"):
-        context_parts.append(f"**Caller**: {user.get('phone')}\n")
+        context_parts.append(f"Caller: {user.get('phone')}\n")
 
     # Repositories
     repos = user_context.get("repos", [])
     if repos:
-        context_parts.append("\n**Connected Repositories**:\n")
+        context_parts.append("Repos: ")
+        repo_strs = []
         for repo in repos:
             url = repo.get("github_url", "")
             branch = repo.get("default_branch", "main")
-            path = repo.get("local_path", "")
-            context_parts.append(f"- {url} (branch: {branch})")
-            if path:
-                context_parts.append(f" at {path}")
-            context_parts.append("\n")
+            repo_strs.append(f"{url} ({branch})")
+        context_parts.append(", ".join(repo_strs) + "\n")
 
-    # Previous conversation summary
+    # Previous conversation summary (Postgres backup)
     memory = user_context.get("memory", {})
     if memory.get("summary"):
-        context_parts.append(f"\n**Previous Conversation**:\n{memory.get('summary')}\n")
+        context_parts.append(f"Last session: {memory.get('summary')}\n")
+
+    context_parts.append("</USER_CONTEXT>")
 
     return "".join(context_parts)
 
