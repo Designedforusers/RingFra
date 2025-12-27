@@ -70,6 +70,14 @@ class SDKBridgeProcessor(FrameProcessor):
         "thanks bye", "thank you bye", "thanks goodbye",
     ]
     
+    # Phrases that indicate user wants a callback
+    CALLBACK_PHRASES = [
+        "call me back", "call back", "let me know", "notify me",
+        "when it's done", "when it's live", "when it's finished",
+        "when you're done", "text me when", "message me when",
+        "give me a callback", "callback when", "ring me",
+    ]
+    
     # Context-aware filler phrases to eliminate awkward silence
     THINKING_FILLERS = {
         "lookup": [
@@ -109,6 +117,7 @@ class SDKBridgeProcessor(FrameProcessor):
         zep_session: ZepSession | None = None,
         end_call_callback=None,
         is_callback: bool = False,
+        caller_phone: str | None = None,
     ):
         super().__init__()
         self.session = session
@@ -120,6 +129,11 @@ class SDKBridgeProcessor(FrameProcessor):
         self._long_op_task: asyncio.Task | None = None  # For streaming fillers
         self._current_query_task: asyncio.Task | None = None  # Track current SDK query for interruption
         self._last_user_message: str | None = None  # Track for Zep persistence
+        
+        # Callback detection - safety net for when agent forgets to schedule
+        self._callback_requested = False  # User asked for a callback
+        self._callback_scheduled = False  # Agent actually scheduled one via tool
+        self._caller_phone = caller_phone  # Store for fallback scheduling
     
     def mark_session_ready(self):
         """Called when SDK session is connected and ready."""
@@ -216,10 +230,38 @@ class SDKBridgeProcessor(FrameProcessor):
             # Pass through other frames
             await self.push_frame(frame, direction)
     
+    def _has_callback_intent(self, text: str) -> bool:
+        """Check if user is requesting a callback."""
+        text_lower = text.lower()
+        return any(phrase in text_lower for phrase in self.CALLBACK_PHRASES)
+    
+    async def _schedule_fallback_callback(self):
+        """Schedule a safety-net callback when agent forgot to schedule one."""
+        if not self._caller_phone:
+            logger.warning("Cannot schedule fallback callback - no phone number")
+            return
+        
+        try:
+            from src.tasks.queue import enqueue_reminder
+            
+            await enqueue_reminder(
+                phone=self._caller_phone,
+                message="Following up on your earlier request. Is there anything else you need help with?",
+                delay_seconds=300,  # 5 minutes
+            )
+            logger.info(f"Fallback callback scheduled for {self._caller_phone} in 5 minutes")
+        except Exception as e:
+            logger.error(f"Failed to schedule fallback callback: {e}")
+    
     async def _process_user_input(self, text: str):
         """Send user input to SDK and stream response to TTS."""
         logger.info(f"User said: {text}")
         self._last_user_message = text  # Track for Zep persistence
+        
+        # Detect callback intent (passive, doesn't affect flow)
+        if self._has_callback_intent(text):
+            self._callback_requested = True
+            logger.info("Callback intent detected in user message")
         
         # Start timing from when user finished speaking
         user_done_time = time.monotonic()
@@ -227,6 +269,11 @@ class SDKBridgeProcessor(FrameProcessor):
         # Check for goodbye first - compress before ending
         if self._is_goodbye(text):
             logger.info("User said goodbye - compressing session and ending call")
+            
+            # Safety net: schedule fallback callback if user requested one but agent forgot
+            if self._callback_requested and not self._callback_scheduled:
+                logger.warning("Callback requested but not scheduled by agent - scheduling fallback")
+                await self._schedule_fallback_callback()
             
             # Tell user we're saving (sets expectation for brief pause)
             await self.push_frame(TextFrame(text="Got it! Saving our conversation..."))
@@ -272,8 +319,15 @@ class SDKBridgeProcessor(FrameProcessor):
         try:
             first_response = True
             response_chunks = []  # Collect for Zep persistence
+            # Track callback-scheduling tools
+            def on_tool_used(tool_name: str):
+                if tool_name in ("mcp__proactive__handoff_task", "mcp__proactive__set_reminder", 
+                                 "handoff_task", "set_reminder"):
+                    self._callback_scheduled = True
+                    logger.info(f"Callback scheduled via {tool_name}")
+            
             logger.info(f"Starting SDK query for: {text[:50]}...")
-            async for response_text in self.session.query(text):
+            async for response_text in self.session.query(text, tool_callback=on_tool_used):
                 if response_text:
                     response_chunks.append(response_text)
                     
@@ -418,6 +472,7 @@ async def run_sdk_pipeline(
         session=session,
         zep_session=zep_session,
         is_callback=is_callback,
+        caller_phone=caller_phone,
     )
     
     # === Pipeline ===

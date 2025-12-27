@@ -700,6 +700,12 @@ Update the user's CLAUDE.md (via update_user_memory tool) when you learn:
 - Project patterns ("uses pytest for tests", "main branch is production")
 - Important context ("primary repo is PhoneFix", "uses Render for hosting")
 Do this automatically without asking - be concise, use bullet points.
+
+## CRITICAL: Callback Rules
+When user requests a callback ("call me back", "let me know when done", "notify me when finished"):
+1. **Long tasks** (deploy, fix bug, run tests, create PR): Use `handoff_task` - callback is AUTOMATIC after completion
+2. **Inline work + callback request**: You MUST call `set_reminder` before the call ends to schedule the callback
+3. **NEVER** just say "I'll call you back" without actually scheduling it via `handoff_task` or `set_reminder`
 """
 
     # Add Zep memory context if available (from previous conversations)
@@ -814,7 +820,7 @@ class VoiceAgentSession:
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         await self.disconnect()
 
-    async def query(self, prompt: str) -> AsyncIterator[str]:
+    async def query(self, prompt: str, tool_callback=None) -> AsyncIterator[str]:
         """
         Send a query and yield text responses for TTS.
         
@@ -827,6 +833,7 @@ class VoiceAgentSession:
         
         Args:
             prompt: User's voice input (transcribed)
+            tool_callback: Optional callback(tool_name: str) called when tools are used
             
         Yields:
             Text chunks to be spoken back to user
@@ -868,6 +875,8 @@ class VoiceAgentSession:
                             yield new_text
                     elif isinstance(block, ToolUseBlock):
                         logger.debug(f"Tool called: {block.name}")
+                        if tool_callback:
+                            tool_callback(block.name)
 
             # ResultMessage indicates completion
             elif isinstance(message, ResultMessage):
