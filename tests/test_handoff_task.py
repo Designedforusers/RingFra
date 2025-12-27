@@ -189,8 +189,8 @@ class TestCreateBackgroundTask:
     """Test create_background_task database function."""
 
     @pytest.mark.asyncio
-    async def test_create_background_task_serializes_plan(self):
-        """Test that create_background_task properly serializes plan to JSON."""
+    async def test_create_background_task_passes_dict_directly(self):
+        """Test that create_background_task passes dict directly (codec handles serialization)."""
         from src.db.background_tasks import create_background_task
         
         mock_conn = AsyncMock()
@@ -215,11 +215,9 @@ class TestCreateBackgroundTask:
             # Get the actual call arguments
             call_args = mock_conn.fetchrow.call_args
             
-            # The 4th positional arg (index 3) should be the JSON string
-            plan_arg = call_args[0][4]  # SQL is [0], then user_id, phone, task_type, plan_json
+            # The 4th positional arg should be the dict directly (codec handles JSONB)
+            plan_arg = call_args[0][4]  # SQL is [0], then user_id, phone, task_type, plan
             
-            # Should be a string (JSON serialized)
-            assert isinstance(plan_arg, str)
-            
-            # Should be valid JSON that matches original plan
-            assert json.loads(plan_arg) == plan
+            # Should be a dict (codec set in connection.py handles serialization)
+            assert isinstance(plan_arg, dict)
+            assert plan_arg == plan

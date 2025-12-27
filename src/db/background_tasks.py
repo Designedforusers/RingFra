@@ -30,19 +30,16 @@ async def create_background_task(
     Returns:
         Task ID (UUID as string)
     """
-    import json
     pool = await get_pool()
 
     async with pool.acquire() as conn:
-        # Serialize dict to JSON string for JSONB column
-        plan_json = json.dumps(plan)
         row = await conn.fetchrow(
             """
             INSERT INTO background_tasks (user_id, phone, task_type, plan)
-            VALUES ($1, $2, $3, $4::jsonb)
+            VALUES ($1, $2, $3, $4)
             RETURNING id
             """,
-            user_id, phone, task_type, plan_json
+            user_id, phone, task_type, plan
         )
 
         task_id = str(row['id'])
