@@ -46,51 +46,17 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("DATABASE_URL not configured - multi-tenant features disabled")
 
-    # Start ARQ worker in background if Redis is configured
-    arq_task = None
-    if settings.REDIS_URL:
-        try:
-            import asyncio
-            from arq import create_pool
-            from arq.connections import RedisSettings
-            from arq.worker import Worker
-            from src.tasks.worker import WorkerSettings
-            
-            # Create worker instance and run it as a task
-            redis_settings = WorkerSettings.redis_settings
-            worker = Worker(
-                functions=WorkerSettings.functions,
-                cron_jobs=WorkerSettings.cron_jobs,
-                redis_settings=redis_settings,
-                max_jobs=WorkerSettings.max_jobs,
-                job_timeout=WorkerSettings.job_timeout,
-                keep_result=WorkerSettings.keep_result,
-                on_startup=WorkerSettings.on_startup,
-                on_shutdown=WorkerSettings.on_shutdown,
-                on_job_start=WorkerSettings.on_job_start,
-                on_job_end=WorkerSettings.on_job_end,
-            )
-            arq_task = asyncio.create_task(worker.async_run())
-            logger.info("ARQ background worker started")
-        except Exception as e:
-            logger.error(f"Failed to start ARQ worker: {e}")
-    else:
-        logger.warning("REDIS_URL not configured - proactive callbacks disabled")
+    # Note: Background tasks are handled by the dedicated worker service
+    # (render-voice-agent-worker) to ensure proper resource isolation.
+    # Jobs are queued to Redis and picked up by the worker.
+    if not settings.REDIS_URL:
+        logger.warning("REDIS_URL not configured - background tasks disabled")
 
     yield
 
     # Cleanup
     logger.info("Shutting down Render Voice Agent")
-    
-    # Cancel ARQ worker
-    if arq_task:
-        arq_task.cancel()
-        try:
-            await arq_task
-        except asyncio.CancelledError:
-            pass
-        logger.info("ARQ worker stopped")
-    
+
     if settings.DATABASE_URL:
         try:
             from src.db.connection import close_pool
