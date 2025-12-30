@@ -103,13 +103,7 @@ async def execute_background_task(ctx: dict, task_id: str) -> dict[str, Any]:
     Spawns a headless SDK session that executes the task plan autonomously,
     then calls the user back with the result.
     """
-    from claude_agent_sdk import (
-        AssistantMessage,
-        ClaudeAgentOptions,
-        ClaudeSDKClient,
-        TextBlock,
-        ToolUseBlock,
-    )
+    from claude_agent_sdk import query
 
     from src.tasks.schemas import TASK_RESULT_SCHEMA
 
@@ -206,14 +200,14 @@ Execute each step. When done, provide a clear summary of what happened."""
         env_vars["GH_TOKEN"] = github_token
         env_vars["GITHUB_TOKEN"] = github_token
 
-    # Build SDK options with structured output for reliable result extraction
-    options = ClaudeAgentOptions(
-        cwd=cwd,
-        env=env_vars,
-        system_prompt=system_prompt,
-        mcp_servers=mcp_servers,
-        permission_mode="bypassPermissions",  # AUTONOMOUS - no prompts
-        allowed_tools=[
+    # Build query options with structured output for reliable result extraction
+    query_options = {
+        "cwd": cwd,
+        "env": env_vars,
+        "system_prompt": system_prompt,
+        "mcp_servers": mcp_servers,
+        "permission_mode": "bypassPermissions",  # AUTONOMOUS - no prompts
+        "allowed_tools": [
             "Read", "Write", "Edit", "Glob", "Grep", "Bash",
             "mcp__render__list_services",
             "mcp__render__get_service",
@@ -221,13 +215,15 @@ Execute each step. When done, provide a clear summary of what happened."""
             "mcp__render__get_deploy",
             "mcp__render__list_logs",
             "mcp__render__get_metrics",
+            "mcp__render__list_workspaces",
+            "mcp__render__select_workspace",
         ],
-        max_turns=30,
-        output_format={
+        "max_turns": 30,
+        "output_format": {
             "type": "json_schema",
             "schema": TASK_RESULT_SCHEMA
         },
-    )
+    }
 
     structured_result = None
     total_cost = 0.0
@@ -236,25 +232,34 @@ Execute each step. When done, provide a clear summary of what happened."""
 
     try:
         logger.info(f"Starting headless SDK session for task {task_id}")
+        prompt = f"Execute this task: {plan.get('objective', task_type)}"
 
-        async with ClaudeSDKClient(options) as client:
-            await client.query(f"Execute this task: {plan.get('objective', task_type)}")
+        async for msg in query(prompt=prompt, options=query_options):
+            # Handle both dict and object style messages
+            msg_type = msg.get("type") if isinstance(msg, dict) else getattr(msg, "type", None)
+            msg_subtype = msg.get("subtype") if isinstance(msg, dict) else getattr(msg, "subtype", None)
 
-            async for msg in client.receive_response():
-                # Log tool usage for visibility into headless execution
-                if isinstance(msg, AssistantMessage):
-                    for block in msg.content:
-                        if isinstance(block, ToolUseBlock):
-                            logger.info(f"[HEADLESS] Tool: {block.name}")
+            # Log tool usage for visibility
+            if msg_type == "assistant":
+                content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
+                if content:
+                    for block in content:
+                        block_type = block.get("type") if isinstance(block, dict) else getattr(block, "type", None)
+                        if block_type == "tool_use":
+                            tool_name = block.get("name") if isinstance(block, dict) else getattr(block, "name", None)
+                            logger.info(f"[HEADLESS] Tool: {tool_name}")
 
-                # Capture structured output from result message
-                if hasattr(msg, 'structured_output') and msg.structured_output:
-                    structured_result = msg.structured_output
-                    logger.info(f"[HEADLESS] Structured result received: {structured_result.get('summary', '')[:100]}")
-
-                # Capture cost from result message
-                if hasattr(msg, 'total_cost_usd') and msg.total_cost_usd:
-                    total_cost = msg.total_cost_usd
+            # Capture structured output from result message
+            if msg_type == "result":
+                struct_out = msg.get("structured_output") if isinstance(msg, dict) else getattr(msg, "structured_output", None)
+                if struct_out:
+                    structured_result = struct_out
+                    logger.info(f"[HEADLESS] Structured result: {structured_result.get('summary', '')[:100]}")
+                
+                # Also try to get cost
+                cost = msg.get("total_cost_usd") if isinstance(msg, dict) else getattr(msg, "total_cost_usd", None)
+                if cost:
+                    total_cost = cost
 
         # Extract summary from structured result (or fallback)
         if structured_result:
@@ -262,6 +267,7 @@ Execute each step. When done, provide a clear summary of what happened."""
             success = structured_result.get("success", True)
             details = structured_result.get("details", {})
             action_items = structured_result.get("action_items", [])
+            logger.info(f"[HEADLESS] Using structured output: {summary[:100]}")
         else:
             logger.warning(f"Task {task_id} did not return structured output, using fallback")
             summary = "Task completed"
