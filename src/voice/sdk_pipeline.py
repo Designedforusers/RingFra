@@ -273,40 +273,51 @@ class SDKBridgeProcessor(FrameProcessor):
         # Start timing from when user finished speaking
         user_done_time = time.monotonic()
         
-        # Check for goodbye first - compress before ending
+        # Check for goodbye first - compress with keepalive to prevent Twilio timeout
         if self._is_goodbye(text):
-            logger.info("User said goodbye - compressing session and ending call")
-            
+            logger.info("[GOODBYE] Starting goodbye sequence")
+
             # Safety net: schedule fallback callback if user requested one but agent forgot
             if self._callback_requested and not self._callback_scheduled:
-                logger.warning("Callback requested but not scheduled by agent - scheduling fallback")
+                logger.warning("[GOODBYE] Callback requested but not scheduled - scheduling fallback")
                 await self._schedule_fallback_callback(self._last_user_message)
-            
-            # Tell user we're saving (sets expectation for brief pause)
-            await self.push_frame(TextFrame(text="Got it! Saving our conversation..."))
-            
-            # Compress NOW while session is still fully active
-            # This takes 2-5 seconds but user knows to wait
+
+            # Start compression in background (non-blocking)
+            compress_task = asyncio.create_task(self.session.compress_and_save_memory())
+
+            # Natural filler while compressing - keeps audio flowing to prevent Twilio timeout
+            await self.push_frame(TextFrame(text="Got it, just saving a quick note about our conversation..."))
+
+            # Keep audio flowing - check every 4 seconds, send filler if still compressing
+            while not compress_task.done():
+                await asyncio.sleep(4)
+                if not compress_task.done():
+                    await self.push_frame(TextFrame(text="Almost done..."))
+                    logger.debug("[GOODBYE] Sent keepalive filler")
+
+            # Get compression result
             try:
-                summary = await self.session.compress_and_save_memory()
+                summary = compress_task.result()
                 if summary:
-                    logger.info(f"Compression complete: {len(summary)} chars saved")
-                    await self.push_frame(TextFrame(text="Done! Talk to you later."))
+                    logger.info(f"[GOODBYE] Compression complete: {len(summary)} chars")
                 else:
-                    # No user_id or compression failed - still say goodbye gracefully
-                    logger.debug("No compression performed (no user_id or failed)")
-                    await self.push_frame(TextFrame(text="Talk to you later!"))
+                    logger.debug("[GOODBYE] No compression (no user_id or failed)")
             except Exception as e:
-                logger.error(f"Compression error during goodbye: {e}")
-                await self.push_frame(TextFrame(text="Talk to you later!"))
-            
+                logger.error(f"[GOODBYE] Compression error: {e}")
+
+            # Final goodbye
+            await self.push_frame(TextFrame(text="Perfect, saved! Talk to you later."))
             await self.push_frame(LLMFullResponseEndFrame())
-            
+
+            # Give TTS time to speak before ending
+            await asyncio.sleep(1.5)
+
             # Trigger end of call callback if set
             if self._end_call_callback:
                 await self._end_call_callback()
-            
+
             # End the call - agent hangs up
+            logger.info("[GOODBYE] Pushing EndFrame")
             await self.push_frame(EndFrame())
             return
         
