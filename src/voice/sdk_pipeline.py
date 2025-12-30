@@ -286,14 +286,17 @@ class SDKBridgeProcessor(FrameProcessor):
             compress_task = asyncio.create_task(self.session.compress_and_save_memory())
 
             # Natural filler while compressing - keeps audio flowing to prevent Twilio timeout
+            # IMPORTANT: Must send LLMFullResponseEndFrame after each TextFrame to flush TTS
             await self.push_frame(TextFrame(text="Got it, just saving a quick note about our conversation..."))
+            await self.push_frame(LLMFullResponseEndFrame())
 
             # Keep audio flowing - check every 4 seconds, send filler if still compressing
             while not compress_task.done():
                 await asyncio.sleep(4)
                 if not compress_task.done():
                     await self.push_frame(TextFrame(text="Almost done..."))
-                    logger.debug("[GOODBYE] Sent keepalive filler")
+                    await self.push_frame(LLMFullResponseEndFrame())  # Flush TTS
+                    logger.info("[GOODBYE] Sent keepalive filler")
 
             # Get compression result
             try:
