@@ -498,6 +498,8 @@ async def run_sdk_pipeline(
     ]
     
     # === Task ===
+    # Disable idle timeout - SDK bridge doesn't emit BotSpeakingFrame/LLMFullResponseEndFrame
+    # that Pipecat uses for activity detection. The SDK manages its own session lifecycle.
     task = PipelineTask(
         pipeline,
         params=PipelineParams(
@@ -507,6 +509,7 @@ async def run_sdk_pipeline(
             enable_metrics=True,
         ),
         observers=observers,
+        idle_timeout_secs=None,  # Disable - SDK handles lifecycle, not Pipecat
     )
     
     # === Event Handlers ===
