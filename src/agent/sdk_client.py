@@ -980,6 +980,11 @@ class VoiceAgentSession:
 
         logger.info("Compressing conversation for memory persistence...")
 
+        # TODO: REMOVE THIS - Testing keepalive with artificial delay
+        import asyncio
+        logger.warning("[TEST] Simulating slow compression with 8 second delay...")
+        await asyncio.sleep(8)
+
         # Ask Claude to summarize (uses full conversation context)
         compress_prompt = """Summarize our conversation concisely for future reference. Include:
 1. What tasks were completed and their outcomes
