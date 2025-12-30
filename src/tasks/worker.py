@@ -271,7 +271,6 @@ Execute each step. When done, provide a clear summary of what happened."""
             "mcp__exa__web_search_exa",
             "mcp__exa__get_code_context_exa",
         ],
-        max_turns=30,
         output_format={
             "type": "json_schema",
             "schema": TASK_RESULT_SCHEMA
@@ -287,7 +286,7 @@ Execute each step. When done, provide a clear summary of what happened."""
 
     try:
         logger.info(f"Starting headless SDK session for task {task_id}")
-        logger.debug(f"[HEADLESS] Query options: cwd={cwd}, mcp_servers={list(mcp_servers.keys())}, max_turns=30")
+        logger.debug(f"[HEADLESS] Query options: cwd={cwd}, mcp_servers={list(mcp_servers.keys())}, no turn limit")
         prompt = f"Execute this task: {plan.get('objective', task_type)}"
 
         async for msg in query(prompt=prompt, options=query_options):

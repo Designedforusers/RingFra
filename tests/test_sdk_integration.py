@@ -51,7 +51,7 @@ class TestClaudeAgentOptionsUsage:
         # Verify it has the expected attributes
         assert query_options.cwd == "/app"
         assert query_options.permission_mode == "bypassPermissions"
-        assert query_options.max_turns == 30
+        # Note: No max_turns limit - tasks run until completion
 
     def test_claude_agent_options_has_can_use_tool_attribute(self):
         """Verify ClaudeAgentOptions has the can_use_tool attribute that caused the error."""
