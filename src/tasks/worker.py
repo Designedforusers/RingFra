@@ -103,7 +103,7 @@ async def execute_background_task(ctx: dict, task_id: str) -> dict[str, Any]:
     Spawns a headless SDK session that executes the task plan autonomously,
     then calls the user back with the result.
     """
-    from claude_agent_sdk import query
+    from claude_agent_sdk import ClaudeAgentOptions, query
 
     from src.tasks.schemas import TASK_RESULT_SCHEMA
 
@@ -201,13 +201,13 @@ Execute each step. When done, provide a clear summary of what happened."""
         env_vars["GITHUB_TOKEN"] = github_token
 
     # Build query options with structured output for reliable result extraction
-    query_options = {
-        "cwd": cwd,
-        "env": env_vars,
-        "system_prompt": system_prompt,
-        "mcp_servers": mcp_servers,
-        "permission_mode": "bypassPermissions",  # AUTONOMOUS - no prompts
-        "allowed_tools": [
+    query_options = ClaudeAgentOptions(
+        cwd=cwd,
+        env=env_vars,
+        system_prompt=system_prompt,
+        mcp_servers=mcp_servers,
+        permission_mode="bypassPermissions",  # AUTONOMOUS - no prompts
+        allowed_tools=[
             "Read", "Write", "Edit", "Glob", "Grep", "Bash",
             "mcp__render__list_services",
             "mcp__render__get_service",
@@ -218,12 +218,12 @@ Execute each step. When done, provide a clear summary of what happened."""
             "mcp__render__list_workspaces",
             "mcp__render__select_workspace",
         ],
-        "max_turns": 30,
-        "output_format": {
+        max_turns=30,
+        output_format={
             "type": "json_schema",
             "schema": TASK_RESULT_SCHEMA
         },
-    }
+    )
 
     structured_result = None
     total_cost = 0.0
