@@ -108,7 +108,10 @@ async def execute_background_task(ctx: dict, task_id: str) -> dict[str, Any]:
         ClaudeAgentOptions,
         ClaudeSDKClient,
         TextBlock,
+        ToolUseBlock,
     )
+
+    from src.tasks.schemas import TASK_RESULT_SCHEMA
 
     from src.db.background_tasks import get_background_task, update_task_status
     from src.db.users import get_user_credentials, get_user_repos
@@ -203,7 +206,7 @@ Execute each step. When done, provide a clear summary of what happened."""
         env_vars["GH_TOKEN"] = github_token
         env_vars["GITHUB_TOKEN"] = github_token
 
-    # Build SDK options
+    # Build SDK options with structured output for reliable result extraction
     options = ClaudeAgentOptions(
         cwd=cwd,
         env=env_vars,
@@ -220,9 +223,13 @@ Execute each step. When done, provide a clear summary of what happened."""
             "mcp__render__get_metrics",
         ],
         max_turns=30,
+        output_format={
+            "type": "json_schema",
+            "schema": TASK_RESULT_SCHEMA
+        },
     )
 
-    result_text = ""
+    structured_result = None
     total_cost = 0.0
     status = "completed"
     error_msg = None
@@ -234,35 +241,64 @@ Execute each step. When done, provide a clear summary of what happened."""
             await client.query(f"Execute this task: {plan.get('objective', task_type)}")
 
             async for msg in client.receive_response():
+                # Log tool usage for visibility into headless execution
                 if isinstance(msg, AssistantMessage):
                     for block in msg.content:
-                        if isinstance(block, TextBlock):
-                            result_text += block.text + "\n"
+                        if isinstance(block, ToolUseBlock):
+                            logger.info(f"[HEADLESS] Tool: {block.name}")
+
+                # Capture structured output from result message
+                if hasattr(msg, 'structured_output') and msg.structured_output:
+                    structured_result = msg.structured_output
+                    logger.info(f"[HEADLESS] Structured result received: {structured_result.get('summary', '')[:100]}")
 
                 # Capture cost from result message
                 if hasattr(msg, 'total_cost_usd') and msg.total_cost_usd:
                     total_cost = msg.total_cost_usd
 
+        # Extract summary from structured result (or fallback)
+        if structured_result:
+            summary = structured_result.get("summary", "Task completed")
+            success = structured_result.get("success", True)
+            details = structured_result.get("details", {})
+            action_items = structured_result.get("action_items", [])
+        else:
+            logger.warning(f"Task {task_id} did not return structured output, using fallback")
+            summary = "Task completed"
+            success = True
+            details = {}
+            action_items = []
+
         logger.info(f"Task {task_id} completed. Cost: ${total_cost:.4f}")
-        await update_task_status(task_id, "completed", result=result_text, cost_usd=total_cost)
+        await update_task_status(
+            task_id, 
+            "completed", 
+            result=summary,
+            cost_usd=total_cost
+        )
 
     except Exception as e:
         logger.error(f"Task {task_id} failed: {e}")
         status = "failed"
         error_msg = str(e)
-        result_text = f"Task failed: {e}"
+        summary = f"Task failed: {e}"
+        success = False
+        details = {}
+        action_items = []
         await update_task_status(task_id, "failed", error=error_msg)
 
-    # Call the user back with the result
+    # Call the user back with the structured result
     try:
         await initiate_callback(
             phone=phone,
             context={
                 "task_type": task_type,
                 "objective": plan.get("objective", ""),
-                "summary": result_text[:500] if result_text else "Task completed",
+                "summary": summary,
                 "status": status,
-                "success": status == "completed",
+                "success": success,
+                "details": details,
+                "action_items": action_items,
             },
             callback_type="task_complete",
         )
@@ -271,10 +307,10 @@ Execute each step. When done, provide a clear summary of what happened."""
         # Fall back to SMS
         await send_sms(
             phone=phone,
-            message=f"[PhoneFix] {task_type} {status}: {result_text[:100] if result_text else 'Task completed'}",
+            message=f"[PhoneFix] {task_type} {status}: {summary[:100]}",
         )
 
-    return {"task_id": task_id, "status": status, "result": result_text[:500]}
+    return {"task_id": task_id, "status": status, "result": summary}
 
 
 async def reminder_callback(
