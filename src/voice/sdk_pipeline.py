@@ -317,8 +317,11 @@ class SDKBridgeProcessor(FrameProcessor):
                 await self._end_call_callback()
 
             # End the call - agent hangs up
-            logger.info("[GOODBYE] Pushing EndFrame")
+            # The TwilioFrameSerializer with auto_hang_up=True will call Twilio API
+            # to terminate the call when it receives EndFrame
+            logger.info("[GOODBYE] Pushing EndFrame to terminate call")
             await self.push_frame(EndFrame())
+            logger.info("[GOODBYE] EndFrame pushed - Twilio should terminate call")
             return
         
         # Wait for session to be ready (should already be ready)
@@ -448,12 +451,15 @@ async def run_sdk_pipeline(
         )
     
     # === Twilio Transport ===
+    # Must pass params with auto_hang_up=True to terminate call on EndFrame
     serializer = TwilioFrameSerializer(
         stream_sid=stream_sid,
         call_sid=call_sid,
         account_sid=settings.TWILIO_ACCOUNT_SID or "",
         auth_token=settings.TWILIO_AUTH_TOKEN or "",
+        params=TwilioFrameSerializer.InputParams(auto_hang_up=True),
     )
+    logger.info(f"TwilioFrameSerializer: call_sid={call_sid}, auto_hang_up=True")
     
     # No VAD analyzer needed - Deepgram Flux handles turn detection with AI
     transport = FastAPIWebsocketTransport(
