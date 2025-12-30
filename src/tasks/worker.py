@@ -7,6 +7,7 @@ Handles:
 - Scheduled reminders
 """
 
+import traceback
 from typing import Any
 
 from arq import cron
@@ -103,14 +104,28 @@ async def execute_background_task(ctx: dict, task_id: str) -> dict[str, Any]:
     Spawns a headless SDK session that executes the task plan autonomously,
     then calls the user back with the result.
     """
-    from claude_agent_sdk import ClaudeAgentOptions, query
+    import os
+    import shutil
 
-    from src.tasks.schemas import TASK_RESULT_SCHEMA
+    from claude_agent_sdk import ClaudeAgentOptions, query
 
     from src.db.background_tasks import get_background_task, update_task_status
     from src.db.users import get_user_credentials, get_user_repos
+    from src.tasks.schemas import TASK_RESULT_SCHEMA
 
     logger.info(f"Executing background task: {task_id}")
+
+    # Fail-fast: Check critical dependencies before doing any work
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        logger.error(f"Task {task_id} ABORTED: ANTHROPIC_API_KEY not set!")
+        return {"error": "ANTHROPIC_API_KEY not configured", "task_id": task_id}
+
+    cli_path = shutil.which("claude")
+    if not cli_path:
+        logger.error(f"Task {task_id} ABORTED: Claude Code CLI not found in PATH!")
+        return {"error": "Claude Code CLI not found", "task_id": task_id}
+
+    logger.debug(f"[TASK {task_id}] Using Claude CLI at: {cli_path}")
 
     # Load task from database
     task = await get_background_task(task_id)
@@ -229,17 +244,23 @@ Execute each step. When done, provide a clear summary of what happened."""
     total_cost = 0.0
     status = "completed"
     error_msg = None
+    last_text_output = ""  # Capture last text as fallback
+    message_count = 0
 
     try:
         logger.info(f"Starting headless SDK session for task {task_id}")
+        logger.debug(f"[HEADLESS] Query options: cwd={cwd}, mcp_servers={list(mcp_servers.keys())}, max_turns=30")
         prompt = f"Execute this task: {plan.get('objective', task_type)}"
 
         async for msg in query(prompt=prompt, options=query_options):
+            message_count += 1
             # Handle both dict and object style messages
             msg_type = msg.get("type") if isinstance(msg, dict) else getattr(msg, "type", None)
             msg_subtype = msg.get("subtype") if isinstance(msg, dict) else getattr(msg, "subtype", None)
 
-            # Log tool usage for visibility
+            logger.debug(f"[HEADLESS] Message #{message_count}: type={msg_type}, subtype={msg_subtype}")
+
+            # Log tool usage and capture text for visibility
             if msg_type == "assistant":
                 content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
                 if content:
@@ -248,6 +269,12 @@ Execute each step. When done, provide a clear summary of what happened."""
                         if block_type == "tool_use":
                             tool_name = block.get("name") if isinstance(block, dict) else getattr(block, "name", None)
                             logger.info(f"[HEADLESS] Tool: {tool_name}")
+                        elif block_type == "text":
+                            # Capture text output as fallback
+                            text = block.get("text") if isinstance(block, dict) else getattr(block, "text", "")
+                            if text:
+                                last_text_output = text
+                                logger.debug(f"[HEADLESS] Text: {text[:200]}...")
 
             # Capture structured output from result message
             if msg_type == "result":
@@ -255,27 +282,37 @@ Execute each step. When done, provide a clear summary of what happened."""
                 if struct_out:
                     structured_result = struct_out
                     logger.info(f"[HEADLESS] Structured result: {structured_result.get('summary', '')[:100]}")
-                
+
                 # Also try to get cost
                 cost = msg.get("total_cost_usd") if isinstance(msg, dict) else getattr(msg, "total_cost_usd", None)
                 if cost:
                     total_cost = cost
 
-        # Extract summary from structured result (or fallback)
+        logger.info(f"[HEADLESS] Query completed. Messages received: {message_count}")
+
+        # Extract summary from structured result (or fallback to last text)
         if structured_result:
             summary = structured_result.get("summary", "Task completed")
             success = structured_result.get("success", True)
             details = structured_result.get("details", {})
             action_items = structured_result.get("action_items", [])
             logger.info(f"[HEADLESS] Using structured output: {summary[:100]}")
-        else:
-            logger.warning(f"Task {task_id} did not return structured output, using fallback")
-            summary = "Task completed"
+        elif last_text_output:
+            # Use captured text as fallback instead of generic message
+            logger.warning(f"Task {task_id} did not return structured output, using last text as fallback")
+            summary = last_text_output[:500]  # Truncate for voice delivery
             success = True
-            details = {}
+            details = {"fallback": True, "message_count": message_count}
+            action_items = []
+            logger.info(f"[HEADLESS] Using text fallback: {summary[:100]}...")
+        else:
+            logger.warning(f"Task {task_id} returned no structured output AND no text (messages: {message_count})")
+            summary = "Task completed but no details were captured. Please check the logs."
+            success = True
+            details = {"fallback": True, "message_count": message_count, "no_text": True}
             action_items = []
 
-        logger.info(f"Task {task_id} completed. Cost: ${total_cost:.4f}")
+        logger.info(f"Task {task_id} completed. Cost: ${total_cost:.4f}, Messages: {message_count}")
         await update_task_status(
             task_id, 
             "completed", 
@@ -285,11 +322,13 @@ Execute each step. When done, provide a clear summary of what happened."""
 
     except Exception as e:
         logger.error(f"Task {task_id} failed: {e}")
+        logger.error(f"[HEADLESS] Traceback:\n{traceback.format_exc()}")
+        logger.error(f"[HEADLESS] Context: cwd={cwd}, mcp_servers={list(mcp_servers.keys())}, messages_before_fail={message_count}")
         status = "failed"
         error_msg = str(e)
         summary = f"Task failed: {e}"
         success = False
-        details = {}
+        details = {"error": str(e), "message_count": message_count}
         action_items = []
         await update_task_status(task_id, "failed", error=error_msg)
 
@@ -452,7 +491,46 @@ class WorkerSettings:
     # Logging
     @staticmethod
     async def on_startup(ctx: dict) -> None:
+        import os
+        import shutil
+
         logger.info("ARQ worker starting up")
+
+        # Log environment validation
+        logger.info("=" * 50)
+        logger.info("WORKER ENVIRONMENT VALIDATION")
+        logger.info("=" * 50)
+
+        # Check SDK version
+        try:
+            import claude_agent_sdk
+            sdk_version = getattr(claude_agent_sdk, "__version__", "unknown")
+            logger.info(f"[ENV] claude-agent-sdk version: {sdk_version}")
+        except ImportError as e:
+            logger.error(f"[ENV] claude-agent-sdk NOT INSTALLED: {e}")
+
+        # Check Claude Code CLI
+        cli_path = shutil.which("claude")
+        if cli_path:
+            logger.info(f"[ENV] Claude Code CLI found: {cli_path}")
+        else:
+            logger.error("[ENV] Claude Code CLI NOT FOUND in PATH")
+
+        # Check critical environment variables
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if api_key:
+            masked = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
+            logger.info(f"[ENV] ANTHROPIC_API_KEY: {masked}")
+        else:
+            logger.error("[ENV] ANTHROPIC_API_KEY: NOT SET - SDK will fail!")
+
+        render_key = os.environ.get("RENDER_API_KEY", "")
+        logger.info(f"[ENV] RENDER_API_KEY: {'set' if render_key else 'NOT SET'}")
+
+        github_token = os.environ.get("GITHUB_TOKEN", "")
+        logger.info(f"[ENV] GITHUB_TOKEN: {'set' if github_token else 'NOT SET'}")
+
+        logger.info("=" * 50)
 
     @staticmethod
     async def on_shutdown(ctx: dict) -> None:

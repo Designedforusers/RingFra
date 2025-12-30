@@ -9,7 +9,7 @@ dependencies = [
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",
     "pipecat-ai[silero,deepgram,cartesia,anthropic,twilio]>=0.0.98",
-    "claude-agent-sdk>=0.1.18",
+    "claude-agent-sdk==0.1.18",  # Pinned for stability. To upgrade: 1) Update version here 2) Test locally 3) Deploy
     "httpx>=0.25.0",
     "pydantic-settings>=2.0.0",
     "loguru>=0.7.0",
