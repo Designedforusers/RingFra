@@ -12,6 +12,8 @@ import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 from uuid import UUID
 
+from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
+
 
 class TestClaudeAgentOptionsUsage:
     """Verify ClaudeAgentOptions is used instead of dict."""
@@ -111,17 +113,17 @@ class TestStructuredOutputParsing:
             "task_type": "test"
         }
 
-        # Mock a result message with structured output
-        mock_result_message = {
-            "type": "result",
-            "structured_output": {
-                "summary": "Task completed successfully",
-                "success": True,
-                "details": {"items_processed": 5},
-                "action_items": ["Review the changes"]
-            },
-            "total_cost_usd": 0.0123
+        # Mock a ResultMessage with structured output using the proper SDK type
+        mock_result_message = MagicMock(spec=ResultMessage)
+        mock_result_message.is_error = False
+        mock_result_message.num_turns = 3
+        mock_result_message.structured_output = {
+            "summary": "Task completed successfully",
+            "success": True,
+            "details": {"items_processed": 5},
+            "action_items": ["Review the changes"]
         }
+        mock_result_message.total_cost_usd = 0.0123
 
         async def mock_query(*args, **kwargs):
             yield mock_result_message
@@ -160,18 +162,22 @@ class TestStructuredOutputParsing:
             "task_type": "test"
         }
 
-        # Mock messages: assistant with text, then result without structured output
-        mock_messages = [
-            {
-                "type": "assistant",
-                "content": [{"type": "text", "text": "I completed the deployment to staging environment."}]
-            },
-            {
-                "type": "result",
-                "structured_output": None,  # No structured output
-                "total_cost_usd": 0.05
-            }
-        ]
+        # Mock messages using proper SDK types:
+        # 1. AssistantMessage with text
+        mock_text_block = MagicMock(spec=TextBlock)
+        mock_text_block.text = "I completed the deployment to staging environment."
+
+        mock_assistant_message = MagicMock(spec=AssistantMessage)
+        mock_assistant_message.content = [mock_text_block]
+
+        # 2. ResultMessage without structured output
+        mock_result_message = MagicMock(spec=ResultMessage)
+        mock_result_message.is_error = False
+        mock_result_message.num_turns = 3
+        mock_result_message.structured_output = None  # No structured output
+        mock_result_message.total_cost_usd = 0.05
+
+        mock_messages = [mock_assistant_message, mock_result_message]
 
         async def mock_query(*args, **kwargs):
             for msg in mock_messages:

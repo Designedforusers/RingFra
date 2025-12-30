@@ -509,6 +509,7 @@ def get_sdk_options(
     user_context: dict | None = None,
     cwd: Path | None = None,
     zep_context: str | None = None,
+    callback_context: dict | None = None,
 ) -> ClaudeAgentOptions:
     """
     Build ClaudeAgentOptions for the voice agent session.
@@ -570,8 +571,8 @@ def get_sdk_options(
         tools=proactive_tools,
     )
 
-    # Build system prompt with Zep context
-    system_prompt = _build_system_prompt(user_context, zep_context)
+    # Build system prompt with Zep context (or callback-specific prompt)
+    system_prompt = _build_system_prompt(user_context, zep_context, callback_context)
 
     # MCP servers configuration
     mcp_servers = {
@@ -698,8 +699,21 @@ def get_sdk_options(
     )
 
 
-def _build_system_prompt(user_context: dict | None, zep_context: str | None = None) -> str:
-    """Build the system prompt with user context and Zep memory."""
+def _build_system_prompt(
+    user_context: dict | None,
+    zep_context: str | None = None,
+    callback_context: dict | None = None,
+) -> str:
+    """Build the system prompt with user context and Zep memory.
+
+    If callback_context is provided, uses the callback-specific prompt that
+    prevents hallucination by strictly limiting Claude to facts in the context.
+    """
+    from src.voice.prompts import get_callback_prompt
+
+    # Use callback-specific prompt for outbound callback calls
+    if callback_context:
+        return get_callback_prompt(callback_context)
 
     base_prompt = """<role>
 You are an on-call engineer available via phone. You help users manage code and infrastructure through voice commands.
@@ -818,12 +832,14 @@ class VoiceAgentSession:
         user_context: dict | None = None,
         cwd: Path | None = None,
         caller_phone: str | None = None,
+        callback_context: dict | None = None,
     ):
         self.user_context = user_context
         self.cwd = cwd
         self.caller_phone = caller_phone
+        self.callback_context = callback_context
         self._zep_context: str | None = None  # Zep context block for system prompt
-        self.options = get_sdk_options(user_context, cwd)
+        self.options = get_sdk_options(user_context, cwd, callback_context=callback_context)
         self.client: ClaudeSDKClient | None = None
         self._connected = False
 
@@ -831,7 +847,7 @@ class VoiceAgentSession:
         """Set initial Zep context before connecting."""
         self._zep_context = context
         # Rebuild options with Zep context included
-        self.options = get_sdk_options(self.user_context, self.cwd, self._zep_context)
+        self.options = get_sdk_options(self.user_context, self.cwd, self._zep_context, self.callback_context)
 
     def update_zep_context(self, context: str) -> None:
         """Update Zep context after a turn (for next query)."""

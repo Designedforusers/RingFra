@@ -11,7 +11,13 @@ These tools provide full Claude Code capabilities with native MCP support:
 
 import os
 
-from claude_agent_sdk import query, ClaudeAgentOptions
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    query,
+    ResultMessage,
+    TextBlock,
+)
 from loguru import logger
 
 from src.config import settings
@@ -98,61 +104,18 @@ async def run_agent(prompt: str, options: ClaudeAgentOptions) -> str:
 
     try:
         async for message in query(prompt=prompt, options=options):
-            # Handle dict-style messages
-            if isinstance(message, dict):
-                msg_type = message.get("type")
-                msg_subtype = message.get("subtype")
+            # SDK returns typed objects - use isinstance() for proper type checking
+            if isinstance(message, AssistantMessage):
+                for block in message.content:
+                    if isinstance(block, TextBlock) and block.text:
+                        result_text = block.text
 
-                if msg_type == "assistant":
-                    content = message.get("content")
-                    if content and isinstance(content, list):
-                        for block in content:
-                            if isinstance(block, dict) and block.get("type") == "text":
-                                result_text = block.get("text", "")
-
-                elif msg_type == "result":
-                    if msg_subtype == "success":
-                        result = message.get("result")
-                        if result:
-                            result_text = str(result)
-                    elif msg_subtype in ("error", "error_during_execution"):
-                        error = message.get("error")
-                        result_text = f"Error: {error}" if error else "An error occurred"
-
-                elif msg_type == "system" and msg_subtype == "init":
-                    mcp_servers = message.get("mcp_servers", [])
-                    for server in mcp_servers:
-                        if server.get("status") != "connected":
-                            logger.warning(f"MCP server {server.get('name')} not connected: {server.get('status')}")
-
-            # Handle object-style messages
-            else:
-                msg_type = getattr(message, "type", None)
-                msg_subtype = getattr(message, "subtype", None)
-
-                if msg_type == "assistant":
-                    content = getattr(message, "content", None)
-                    if content and isinstance(content, list):
-                        for block in content:
-                            if hasattr(block, "type") and block.type == "text":
-                                result_text = getattr(block, "text", "")
-
-                elif msg_type == "result":
-                    if msg_subtype == "success":
-                        result = getattr(message, "result", None)
-                        if result:
-                            result_text = str(result)
-                    elif msg_subtype in ("error", "error_during_execution"):
-                        error = getattr(message, "error", None)
-                        result_text = f"Error: {error}" if error else "An error occurred"
-
-                elif msg_type == "system" and msg_subtype == "init":
-                    mcp_servers = getattr(message, "mcp_servers", [])
-                    for server in mcp_servers:
-                        status = server.get("status") if isinstance(server, dict) else getattr(server, "status", None)
-                        name = server.get("name") if isinstance(server, dict) else getattr(server, "name", None)
-                        if status != "connected":
-                            logger.warning(f"MCP server {name} not connected: {status}")
+            elif isinstance(message, ResultMessage):
+                if message.is_error:
+                    error = getattr(message, "error", None) or getattr(message, "result", None)
+                    result_text = f"Error: {error}" if error else "An error occurred"
+                elif hasattr(message, "result") and message.result:
+                    result_text = str(message.result)
 
     except Exception as e:
         logger.error(f"Agent execution error: {e}")

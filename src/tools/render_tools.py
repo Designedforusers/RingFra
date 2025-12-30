@@ -7,7 +7,13 @@ Uses:
 """
 
 import httpx
-from claude_agent_sdk import query, ClaudeAgentOptions
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    query,
+    ResultMessage,
+    TextBlock,
+)
 from loguru import logger
 
 from src.config import settings
@@ -139,100 +145,40 @@ async def run_render_agent(prompt: str, timeout: float = 30.0) -> str:
             message_count = 0
             async for message in query(prompt=prompt, options=options):
                 message_count += 1
-                # Log ALL messages at INFO level for debugging MCP issues
-                if isinstance(message, dict):
-                    msg_type = message.get("type")
-                    msg_subtype = message.get("subtype")
-                    logger.info(f"SDK Message #{message_count}: type={msg_type}, subtype={msg_subtype}, keys={list(message.keys())}")
-                else:
-                    msg_type = getattr(message, "type", None)
-                    msg_subtype = getattr(message, "subtype", None)
-                    logger.info(f"SDK Message #{message_count}: type={msg_type}, subtype={msg_subtype}, class={type(message).__name__}")
-                
-                # Handle dict-style messages
-                if isinstance(message, dict):
-                    # Check MCP connection status from system.init
-                    if msg_type == "system" and msg_subtype == "init":
-                        logger.info(f"system.init received! Full message: {message}")
-                        mcp_servers = message.get("mcp_servers", [])
-                        logger.info(f"MCP servers in init: {mcp_servers}")
+                msg_type_name = type(message).__name__
+                logger.debug(f"SDK Message #{message_count}: {msg_type_name}")
+
+                # AssistantMessage - contains Claude's text and tool use
+                if isinstance(message, AssistantMessage):
+                    for block in message.content:
+                        if isinstance(block, TextBlock) and block.text:
+                            result_text = block.text
+                            logger.debug(f"Got text: {block.text[:100]}...")
+
+                # ResultMessage - indicates completion
+                elif isinstance(message, ResultMessage):
+                    logger.info(f"Result: is_error={message.is_error}, turns={message.num_turns}")
+                    if message.is_error:
+                        error = getattr(message, "error", None) or getattr(message, "result", None)
+                        logger.error(f"SDK error: {error}")
+                        result_text = ""
+                    elif hasattr(message, "result") and message.result:
+                        result_text = str(message.result)
+
+                # Check for MCP connection status in init messages
+                elif msg_type_name == "SystemMessage":
+                    mcp_servers = getattr(message, "mcp_servers", [])
+                    if mcp_servers:
+                        logger.info(f"MCP servers: {mcp_servers}")
                         for server in mcp_servers:
-                            name = server.get("name", "")
-                            status = server.get("status", "")
-                            logger.info(f"MCP server '{name}' status: {status}")
+                            name = server.get("name") if isinstance(server, dict) else getattr(server, "name", "")
+                            status = server.get("status") if isinstance(server, dict) else getattr(server, "status", "")
                             if name == "render":
                                 if status == "connected":
                                     mcp_connected = True
+                                    logger.info("Render MCP connected!")
                                 else:
-                                    logger.error(f"Render MCP failed to connect: {status}")
-
-                    elif msg_type == "assistant":
-                        content = message.get("content")
-                        if content and isinstance(content, list):
-                            for block in content:
-                                if isinstance(block, dict) and block.get("type") == "text":
-                                    result_text = block.get("text", "")
-
-                    elif msg_type == "result":
-                        if msg_subtype == "success":
-                            result = message.get("result")
-                            if result:
-                                result_text = str(result)
-                        elif msg_subtype in ("error", "error_during_execution"):
-                            error = message.get("error")
-                            logger.error(f"SDK error: {error}")
-                            result_text = ""
-                
-                # Handle object-style messages (SDK returns class instances, not dicts)
-                else:
-                    class_name = type(message).__name__
-                    
-                    # SystemMessage with subtype "init" contains MCP server status
-                    if class_name == "SystemMessage" and msg_subtype == "init":
-                        logger.info(f"SystemMessage.init received! Checking MCP servers...")
-                        mcp_servers = getattr(message, "mcp_servers", [])
-                        logger.info(f"MCP servers in init: {mcp_servers}")
-                        if mcp_servers:
-                            for server in mcp_servers:
-                                name = server.get("name") if isinstance(server, dict) else getattr(server, "name", "")
-                                status = server.get("status") if isinstance(server, dict) else getattr(server, "status", "")
-                                logger.info(f"MCP server '{name}' status: {status}")
-                                if name == "render":
-                                    if status == "connected":
-                                        mcp_connected = True
-                                        logger.info("Render MCP connected successfully!")
-                                    else:
-                                        logger.error(f"Render MCP failed to connect: {status}")
-                        else:
-                            logger.warning("No MCP servers found in SystemMessage.init")
-
-                    # AssistantMessage contains Claude's response
-                    elif class_name == "AssistantMessage":
-                        content = getattr(message, "content", None)
-                        logger.info(f"AssistantMessage content: {content}")
-                        if content and isinstance(content, list):
-                            for block in content:
-                                # Check for TextBlock
-                                block_class = type(block).__name__
-                                block_type = getattr(block, "type", None)
-                                logger.info(f"Content block: class={block_class}, type={block_type}, attrs={dir(block)}")
-                                if block_class == "TextBlock" or block_type == "text":
-                                    text = getattr(block, "text", "")
-                                    if text:
-                                        result_text = text
-                                        logger.info(f"Got text from AssistantMessage: {text[:100]}...")
-
-                    # ResultMessage indicates completion
-                    elif class_name == "ResultMessage":
-                        if msg_subtype == "success":
-                            result = getattr(message, "result", None)
-                            if result:
-                                result_text = str(result)
-                                logger.info(f"Got result from ResultMessage: {result[:100] if result else 'empty'}...")
-                        elif msg_subtype in ("error", "error_during_execution"):
-                            error = getattr(message, "error", None)
-                            logger.error(f"SDK error in ResultMessage: {error}")
-                            result_text = ""
+                                    logger.error(f"Render MCP failed: {status}")
 
         # Run with timeout
         await asyncio.wait_for(_run_query(), timeout=timeout)

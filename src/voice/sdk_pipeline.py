@@ -422,6 +422,7 @@ async def run_sdk_pipeline(
         user_context=user_context,
         cwd=cwd,
         caller_phone=caller_phone,
+        callback_context=callback_context,  # Uses callback-specific prompt for outbound calls
     )
     
     # === Zep Memory Session (real-time persistence) ===

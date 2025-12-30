@@ -107,7 +107,14 @@ async def execute_background_task(ctx: dict, task_id: str) -> dict[str, Any]:
     import os
     import shutil
 
-    from claude_agent_sdk import ClaudeAgentOptions, query
+    from claude_agent_sdk import (
+        AssistantMessage,
+        ClaudeAgentOptions,
+        query,
+        ResultMessage,
+        TextBlock,
+        ToolUseBlock,
+    )
 
     from src.db.background_tasks import get_background_task, update_task_status
     from src.db.users import get_user_credentials, get_user_repos
@@ -207,6 +214,11 @@ Execute each step. When done, provide a clear summary of what happened."""
                 "Authorization": f"Bearer {render_api_key}",
             },
         },
+        # Exa MCP - web search and code context for research during autonomous tasks
+        "exa": {
+            "type": "http",
+            "url": f"https://mcp.exa.ai/mcp?exaApiKey={settings.EXA_API_KEY}" if settings.EXA_API_KEY else "https://mcp.exa.ai/mcp",
+        },
     }
 
     # Environment for Bash tools
@@ -216,6 +228,7 @@ Execute each step. When done, provide a clear summary of what happened."""
         env_vars["GITHUB_TOKEN"] = github_token
 
     # Build query options with structured output for reliable result extraction
+    # Full tool access - headless worker needs same capabilities as voice agent
     query_options = ClaudeAgentOptions(
         cwd=cwd,
         env=env_vars,
@@ -223,15 +236,40 @@ Execute each step. When done, provide a clear summary of what happened."""
         mcp_servers=mcp_servers,
         permission_mode="bypassPermissions",  # AUTONOMOUS - no prompts
         allowed_tools=[
-            "Read", "Write", "Edit", "Glob", "Grep", "Bash",
+            # File operations
+            "Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit",
+            # Execution
+            "Bash",
+            # Task management (for complex multi-step work)
+            "Task", "TodoWrite",
+            # Web (for looking up docs, APIs, etc.)
+            "WebFetch", "WebSearch",
+            # Render MCP - FULL access
             "mcp__render__list_services",
             "mcp__render__get_service",
             "mcp__render__list_deploys",
             "mcp__render__get_deploy",
             "mcp__render__list_logs",
+            "mcp__render__list_log_label_values",
             "mcp__render__get_metrics",
             "mcp__render__list_workspaces",
             "mcp__render__select_workspace",
+            "mcp__render__get_selected_workspace",
+            "mcp__render__create_web_service",
+            "mcp__render__create_static_site",
+            "mcp__render__update_web_service",
+            "mcp__render__update_static_site",
+            "mcp__render__update_environment_variables",
+            "mcp__render__list_postgres_instances",
+            "mcp__render__get_postgres",
+            "mcp__render__create_postgres",
+            "mcp__render__query_render_postgres",
+            "mcp__render__list_key_value",
+            "mcp__render__get_key_value",
+            "mcp__render__create_key_value",
+            # Exa MCP - web search and code context
+            "mcp__exa__web_search_exa",
+            "mcp__exa__get_code_context_exa",
         ],
         max_turns=30,
         output_format={
@@ -254,39 +292,35 @@ Execute each step. When done, provide a clear summary of what happened."""
 
         async for msg in query(prompt=prompt, options=query_options):
             message_count += 1
-            # Handle both dict and object style messages
-            msg_type = msg.get("type") if isinstance(msg, dict) else getattr(msg, "type", None)
-            msg_subtype = msg.get("subtype") if isinstance(msg, dict) else getattr(msg, "subtype", None)
 
-            logger.debug(f"[HEADLESS] Message #{message_count}: type={msg_type}, subtype={msg_subtype}")
+            # SDK returns typed objects - use isinstance() for proper type checking
+            msg_type_name = type(msg).__name__
+            logger.debug(f"[HEADLESS] Message #{message_count}: {msg_type_name}")
 
-            # Log tool usage and capture text for visibility
-            if msg_type == "assistant":
-                content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
-                if content:
-                    for block in content:
-                        block_type = block.get("type") if isinstance(block, dict) else getattr(block, "type", None)
-                        if block_type == "tool_use":
-                            tool_name = block.get("name") if isinstance(block, dict) else getattr(block, "name", None)
-                            logger.info(f"[HEADLESS] Tool: {tool_name}")
-                        elif block_type == "text":
-                            # Capture text output as fallback
-                            text = block.get("text") if isinstance(block, dict) else getattr(block, "text", "")
-                            if text:
-                                last_text_output = text
-                                logger.debug(f"[HEADLESS] Text: {text[:200]}...")
+            # AssistantMessage - contains text and tool use blocks
+            if isinstance(msg, AssistantMessage):
+                for block in msg.content:
+                    if isinstance(block, ToolUseBlock):
+                        logger.info(f"[HEADLESS] Tool: {block.name}")
+                    elif isinstance(block, TextBlock):
+                        # Capture text output as fallback
+                        if block.text:
+                            last_text_output = block.text
+                            logger.debug(f"[HEADLESS] Text: {block.text[:200]}...")
 
-            # Capture structured output from result message
-            if msg_type == "result":
-                struct_out = msg.get("structured_output") if isinstance(msg, dict) else getattr(msg, "structured_output", None)
-                if struct_out:
-                    structured_result = struct_out
-                    logger.info(f"[HEADLESS] Structured result: {structured_result.get('summary', '')[:100]}")
+            # ResultMessage - contains structured output and cost
+            elif isinstance(msg, ResultMessage):
+                logger.info(f"[HEADLESS] Result: is_error={msg.is_error}, turns={msg.num_turns}")
 
-                # Also try to get cost
-                cost = msg.get("total_cost_usd") if isinstance(msg, dict) else getattr(msg, "total_cost_usd", None)
-                if cost:
-                    total_cost = cost
+                # Capture structured output
+                if hasattr(msg, 'structured_output') and msg.structured_output:
+                    structured_result = msg.structured_output
+                    summary_preview = structured_result.get('summary', '')[:100] if isinstance(structured_result, dict) else str(structured_result)[:100]
+                    logger.info(f"[HEADLESS] Structured result: {summary_preview}")
+
+                # Capture cost
+                if hasattr(msg, 'total_cost_usd') and msg.total_cost_usd:
+                    total_cost = msg.total_cost_usd
 
         logger.info(f"[HEADLESS] Query completed. Messages received: {message_count}")
 

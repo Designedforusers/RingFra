@@ -5,6 +5,8 @@ Tests for tool implementations.
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 
+from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
+
 from src.tools import execute_tool
 
 
@@ -14,9 +16,21 @@ class TestCodeTools:
     @pytest.mark.asyncio
     async def test_analyze_code(self):
         """Test code analysis with mocked agent."""
-        mock_messages = [
-            {"type": "result", "subtype": "success", "result": "Found auth module in src/auth.py"}
-        ]
+        # Mock an AssistantMessage with text content
+        mock_text_block = MagicMock(spec=TextBlock)
+        mock_text_block.text = "Found auth module in src/auth.py"
+
+        mock_assistant_message = MagicMock(spec=AssistantMessage)
+        mock_assistant_message.content = [mock_text_block]
+
+        # Mock a successful ResultMessage - must have all required attributes
+        mock_result_message = MagicMock(spec=ResultMessage)
+        mock_result_message.is_error = False
+        mock_result_message.result = "Found auth module in src/auth.py"
+        mock_result_message.num_turns = 3
+        mock_result_message.total_cost_usd = 0.01
+
+        mock_messages = [mock_assistant_message, mock_result_message]
 
         async def mock_query(*args, **kwargs):
             for msg in mock_messages:
@@ -30,9 +44,21 @@ class TestCodeTools:
     @pytest.mark.asyncio
     async def test_fix_bug(self):
         """Test bug fixing with mocked agent."""
-        mock_messages = [
-            {"type": "result", "subtype": "success", "result": "Fixed null check in login.py"}
-        ]
+        # Mock an AssistantMessage with text content
+        mock_text_block = MagicMock(spec=TextBlock)
+        mock_text_block.text = "Fixed null check in login.py"
+
+        mock_assistant_message = MagicMock(spec=AssistantMessage)
+        mock_assistant_message.content = [mock_text_block]
+
+        # Mock a successful ResultMessage - must have all required attributes
+        mock_result_message = MagicMock(spec=ResultMessage)
+        mock_result_message.is_error = False
+        mock_result_message.result = "Fixed null check in login.py"
+        mock_result_message.num_turns = 3
+        mock_result_message.total_cost_usd = 0.01
+
+        mock_messages = [mock_assistant_message, mock_result_message]
 
         async def mock_query(*args, **kwargs):
             for msg in mock_messages:
@@ -50,9 +76,21 @@ class TestRenderToolsMCP:
     @pytest.mark.asyncio
     async def test_list_services(self):
         """Test listing services via Render MCP."""
-        mock_messages = [
-            {"type": "result", "subtype": "success", "result": "You have 3 services: api, frontend, database"}
-        ]
+        # Mock an AssistantMessage with text content
+        mock_text_block = MagicMock(spec=TextBlock)
+        mock_text_block.text = "You have 3 services: api, frontend, database"
+
+        mock_assistant_message = MagicMock(spec=AssistantMessage)
+        mock_assistant_message.content = [mock_text_block]
+
+        # Mock a successful ResultMessage - must have all required attributes
+        mock_result_message = MagicMock(spec=ResultMessage)
+        mock_result_message.is_error = False
+        mock_result_message.result = "You have 3 services: api, frontend, database"
+        mock_result_message.num_turns = 3
+        mock_result_message.total_cost_usd = 0.01
+
+        mock_messages = [mock_assistant_message, mock_result_message]
 
         async def mock_query(*args, **kwargs):
             for msg in mock_messages:
@@ -66,9 +104,21 @@ class TestRenderToolsMCP:
     @pytest.mark.asyncio
     async def test_get_logs(self):
         """Test getting logs via Render MCP."""
-        mock_messages = [
-            {"type": "result", "subtype": "success", "result": "No errors in the last 50 logs"}
-        ]
+        # Mock an AssistantMessage with text content
+        mock_text_block = MagicMock(spec=TextBlock)
+        mock_text_block.text = "No errors in the last 50 logs"
+
+        mock_assistant_message = MagicMock(spec=AssistantMessage)
+        mock_assistant_message.content = [mock_text_block]
+
+        # Mock a successful ResultMessage - must have all required attributes
+        mock_result_message = MagicMock(spec=ResultMessage)
+        mock_result_message.is_error = False
+        mock_result_message.result = "No errors in the last 50 logs"
+        mock_result_message.num_turns = 3
+        mock_result_message.total_cost_usd = 0.01
+
+        mock_messages = [mock_assistant_message, mock_result_message]
 
         async def mock_query(*args, **kwargs):
             for msg in mock_messages:
@@ -82,9 +132,21 @@ class TestRenderToolsMCP:
     @pytest.mark.asyncio
     async def test_get_metrics(self):
         """Test getting metrics via Render MCP."""
-        mock_messages = [
-            {"type": "result", "subtype": "success", "result": "CPU at 45%, memory at 60%"}
-        ]
+        # Mock an AssistantMessage with text content
+        mock_text_block = MagicMock(spec=TextBlock)
+        mock_text_block.text = "CPU at 45%, memory at 60%"
+
+        mock_assistant_message = MagicMock(spec=AssistantMessage)
+        mock_assistant_message.content = [mock_text_block]
+
+        # Mock a successful ResultMessage - must have all required attributes
+        mock_result_message = MagicMock(spec=ResultMessage)
+        mock_result_message.is_error = False
+        mock_result_message.result = "CPU at 45%, memory at 60%"
+        mock_result_message.num_turns = 3
+        mock_result_message.total_cost_usd = 0.01
+
+        mock_messages = [mock_assistant_message, mock_result_message]
 
         async def mock_query(*args, **kwargs):
             for msg in mock_messages:
