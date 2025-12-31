@@ -74,6 +74,9 @@ async def initiate_callback(
     twiml = f"""
     <Response>
         <Say voice="Polly.Matthew">{immediate_greeting}</Say>
+        <Start>
+            <Recording recordingChannels="dual" track="both" />
+        </Start>
         <Connect>
             <Stream url="{ws_url}">
                 <Parameter name="callbackContext" value="{escaped_context}" />
