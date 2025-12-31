@@ -144,7 +144,8 @@ async def handle_incoming_call(request: Request) -> Response:
     )
 
     # Connect to WebSocket for bidirectional streaming
-    connect = Connect()
+    # record="record-from-answer" captures both caller and TTS audio
+    connect = Connect(record="record-from-answer")
     stream = Stream(url=ws_url)
     stream.parameter(name="track", value="both_tracks")
     # Pass caller phone to the stream so we can use it for notifications
