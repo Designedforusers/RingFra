@@ -255,6 +255,7 @@ class SDKBridgeProcessor(FrameProcessor):
                 phone=self._caller_phone,
                 message=message,
                 delay_seconds=300,  # 5 minutes
+                is_fallback=True,  # Can be cancelled if handoff_task succeeds
             )
             logger.info(f"Fallback callback scheduled for {self._caller_phone} in 5 minutes")
         except Exception as e:

@@ -94,6 +94,7 @@ async def enqueue_reminder(
     phone: str,
     message: str,
     delay_seconds: int,
+    is_fallback: bool = False,
 ) -> str:
     """
     Schedule a reminder call for later.
@@ -102,6 +103,7 @@ async def enqueue_reminder(
         phone: Phone number to call
         message: Reminder message
         delay_seconds: Seconds to wait before calling
+        is_fallback: If True, this is a fallback reminder that can be cancelled by handoff_task
 
     Returns:
         Job ID
@@ -113,8 +115,46 @@ async def enqueue_reminder(
         message,
         _defer_by=delay_seconds,
     )
-    logger.info(f"Scheduled reminder to {phone} in {delay_seconds}s, job_id={job.job_id}")
+
+    # Only store job_id for fallback reminders (so handoff_task can cancel them)
+    # User-requested reminders should NOT be cancelled
+    if is_fallback:
+        await pool.set(f"fallback_reminder:{phone}", job.job_id, ex=delay_seconds + 60)
+
+    logger.info(f"Scheduled reminder to {phone} in {delay_seconds}s, job_id={job.job_id}, fallback={is_fallback}")
     return job.job_id
+
+
+async def cancel_fallback_reminder(phone: str) -> bool:
+    """
+    Cancel a pending fallback reminder for a phone number.
+
+    Called when handoff_task succeeds to prevent double callback.
+
+    Args:
+        phone: Phone number whose reminder should be cancelled
+
+    Returns:
+        True if a reminder was cancelled, False otherwise
+    """
+    try:
+        pool = await get_redis_pool()
+        key = f"fallback_reminder:{phone}"
+        job_id = await pool.get(key)
+
+        if job_id:
+            job_id_str = job_id.decode() if isinstance(job_id, bytes) else job_id
+            # Abort the pending job
+            await pool.abort_job(job_id_str)
+            await pool.delete(key)
+            logger.info(f"Cancelled fallback reminder for {phone}, job_id={job_id_str}")
+            return True
+        else:
+            logger.debug(f"No fallback reminder found for {phone}")
+            return False
+    except Exception as e:
+        logger.warning(f"Failed to cancel fallback reminder for {phone}: {e}")
+        return False
 
 
 async def add_monitored_service(

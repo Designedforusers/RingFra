@@ -94,7 +94,7 @@ async def handoff_task_tool(args: dict[str, Any]) -> dict[str, Any]:
     """Hand off a task for autonomous background execution with callback."""
     from src.callbacks.outbound import send_sms
     from src.db.background_tasks import create_background_task
-    from src.tasks.queue import RedisUnavailableError, enqueue_background_task
+    from src.tasks.queue import RedisUnavailableError, enqueue_background_task, cancel_fallback_reminder
 
     ctx = _get_session_context()
     phone = ctx.get("caller_phone")
@@ -155,6 +155,9 @@ async def handoff_task_tool(args: dict[str, Any]) -> dict[str, Any]:
 
         # Enqueue for background execution
         await enqueue_background_task(task_id)
+
+        # Cancel any pending fallback reminder to prevent double callback
+        await cancel_fallback_reminder(phone)
 
         return {
             "content": [{
