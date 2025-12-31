@@ -13,7 +13,7 @@ import traceback
 from fastapi import Request, WebSocket
 from fastapi.responses import Response
 from loguru import logger
-from twilio.twiml.voice_response import Connect, Stream, VoiceResponse
+from twilio.twiml.voice_response import Connect, Start, Stream, VoiceResponse
 
 from pipecat.runner.utils import parse_telephony_websocket
 
@@ -143,9 +143,13 @@ async def handle_incoming_call(request: Request) -> Response:
         voice="Polly.Matthew",
     )
 
+    # Start recording before connecting (captures both caller and TTS audio)
+    start = Start()
+    start.recording(recording_channels="dual", track="both")
+    response.append(start)
+
     # Connect to WebSocket for bidirectional streaming
-    # record="record-from-answer" captures both caller and TTS audio
-    connect = Connect(record="record-from-answer")
+    connect = Connect()
     stream = Stream(url=ws_url)
     stream.parameter(name="track", value="both_tracks")
     # Pass caller phone to the stream so we can use it for notifications
