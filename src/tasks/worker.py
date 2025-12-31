@@ -516,10 +516,11 @@ class WorkerSettings:
     redis_settings = RedisSettings.from_dsn(settings.REDIS_URL) if settings.REDIS_URL else None
 
     # Worker settings
-    max_jobs = 10
+    max_jobs = 1  # One task at a time - prevents memory spikes from concurrent SDK sessions
     job_timeout = 1800  # 30 minutes for background tasks
     keep_result = 3600  # 1 hour
     keep_result_forever = False
+    max_tries = 1  # Don't retry failed tasks - just notify user and move on
 
     # Logging
     @staticmethod
