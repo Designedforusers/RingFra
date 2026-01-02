@@ -199,7 +199,7 @@ Phone Call → Twilio → Your Server → Pipecat Pipeline
                           └─────────────────────────┘
                                         ↓
                                   Tools Available:
-                                  - Render MCP (22 tools)
+                                  - Render MCP (20 tools)
                                   - File ops (Read, Write, Edit)
                                   - Bash, Git, Web Search
                                   - Custom (callbacks, SMS)
@@ -214,7 +214,7 @@ For deep architecture details, see [REFERENCE.md](REFERENCE.md).
 | Service | Free Tier | What You'll Use |
 |---------|-----------|-----------------|
 | Twilio | $15 trial credit | ~$0.02/min calls |
-| Deepgram | $200 free credit | ~$0.004/min STT |
+| Deepgram | Free tier available | ~$0.0043/min STT |
 | Cartesia | 1000 chars free | ~$0.015/1K chars TTS |
 | Anthropic | None | ~$0.01-0.05/call |
 | Render | Free tier available | $0 for testing |

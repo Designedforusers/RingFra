@@ -52,7 +52,7 @@ ngrok http 8765
 | Service | Free Tier | Paid Usage |
 |---------|-----------|------------|
 | Twilio | $15 trial credit | ~$0.02/min for calls |
-| Deepgram | $200 free credit | ~$0.0043/min STT |
+| Deepgram | Free tier available | ~$0.0043/min STT |
 | Cartesia | 1000 chars free | ~$0.015/1K chars TTS |
 | Anthropic | None | ~$0.01-0.05/call |
 | Render | Free tier available | $7+/mo for production |
@@ -153,7 +153,7 @@ flowchart TB
     subgraph "6. Claude Agent SDK"
         SDK["ClaudeSDKClient"]
         SDK --> BuiltIn["Built-in Tools:<br/>Read, Write, Edit, Bash,<br/>Glob, Grep, NotebookEdit,<br/>Task, TodoWrite,<br/>WebFetch, WebSearch"]
-        SDK --> RenderMCP["Render MCP<br/>21 tools"]
+        SDK --> RenderMCP["Render MCP<br/>20 tools"]
         SDK --> ExaMCP["Exa MCP<br/>web_search_exa,<br/>get_code_context_exa"]
         SDK --> ProactiveMCP["Proactive MCP"]
     end
@@ -259,7 +259,7 @@ allowed_tools=[
     "Task", "TodoWrite",
     # Web
     "WebFetch", "WebSearch",
-    # Render MCP (21 tools)
+    # Render MCP (20 tools)
     "mcp__render__list_services", "mcp__render__get_service",
     "mcp__render__list_deploys", "mcp__render__get_deploy",
     "mcp__render__list_logs", "mcp__render__list_log_label_values",
@@ -383,26 +383,33 @@ The `SDKBridgeProcessor` is where Claude integration happens—it receives trans
 src/
 ├── main.py                 # FastAPI app, routes, startup
 ├── config.py               # Pydantic settings (env vars)
+├── notifications.py        # SMS notification helpers
 ├── agent/
 │   └── sdk_client.py       # VoiceAgentSession, tools, SDK options
 ├── voice/
 │   ├── sdk_pipeline.py     # Pipecat pipeline, SDKBridgeProcessor
+│   ├── pipeline.py         # Fallback Pipecat pipeline (non-SDK)
 │   ├── handlers.py         # Twilio webhooks, WebSocket handler
 │   └── prompts.py          # System prompts, callback prompts
 ├── tasks/
 │   ├── worker.py           # ARQ worker, execute_background_task
 │   ├── queue.py            # Redis queue helpers
+│   ├── monitors.py         # Service health monitoring
 │   └── schemas.py          # TASK_RESULT_SCHEMA for structured output
 ├── callbacks/
 │   ├── outbound.py         # initiate_callback, send_sms
 │   └── router.py           # Event routing (critical→call, warning→SMS)
 ├── db/
+│   ├── connection.py       # Postgres connection pool
 │   ├── zep_memory.py       # ZepSession class
 │   ├── memory.py           # Postgres fallback memory
 │   ├── background_tasks.py # Task persistence
 │   └── users.py            # Multi-tenant user management
+├── repos/
+│   └── manager.py          # Git worktree management (multi-tenant)
 └── tools/
-    └── ...                 # Legacy tools (now using SDK built-ins)
+    ├── code_tools.py       # Code analysis tools
+    └── render_tools.py     # Render API wrappers
 ```
 
 ---
@@ -449,7 +456,7 @@ class Settings(BaseSettings):
 # Required
 TWILIO_ACCOUNT_SID=AC...
 TWILIO_AUTH_TOKEN=...
-TWILIO_PHONE_NUMBER=+14158536485
+TWILIO_PHONE_NUMBER=+1XXXXXXXXXX  # Your Twilio number
 ANTHROPIC_API_KEY=sk-ant-...
 DEEPGRAM_API_KEY=...
 CARTESIA_API_KEY=...
@@ -1249,9 +1256,16 @@ async def handle_incoming_call(request: Request) -> Response:
 ```python
 # src/callbacks/outbound.py
 
+def _get_websocket_url() -> str:
+    """Get the WebSocket URL for media streams."""
+    if settings.APP_ENV == "production":
+        return f"wss://{settings.APP_BASE_URL}/twilio/media-stream"
+    return f"ws://{settings.HOST}:{settings.PORT}/twilio/media-stream"
+
 async def initiate_callback(phone: str, context: dict, callback_type: str) -> str:
     """Start outbound call with context for the agent."""
     client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+    ws_url = _get_websocket_url()
 
     # Greeting based on result
     if context.get("success", True):
@@ -1264,8 +1278,9 @@ async def initiate_callback(phone: str, context: dict, callback_type: str) -> st
     twiml = f"""
     <Response>
         <Say voice="Polly.Matthew">{greeting}</Say>
+        <Start><Recording recordingChannels="dual" track="both" /></Start>
         <Connect>
-            <Stream url="wss://your-app.onrender.com/twilio/media-stream">
+            <Stream url="{ws_url}">
                 <Parameter name="callbackContext" value="{context_json}" />
                 <Parameter name="callType" value="outbound_{callback_type}" />
                 <Parameter name="callerPhone" value="{phone}" />

@@ -96,6 +96,6 @@ black src/ tests/
 Your Twilio number (set in TWILIO_PHONE_NUMBER env var)
 
 ## Render Services
-- Web: `render-voice-agent` (srv-d53qa0re5dus73b3b40g)
-- DB: `render-voice-agent-db`
-- Redis: `render-voice-agent-redis`
+- Web: `phonefix` (your web service)
+- DB: `phonefix-db`
+- Redis: `phonefix-redis`
