@@ -29,10 +29,8 @@ AI:  "Hey, I fixed the null pointer issue. It was a missing user check
 
 | Metric | Value |
 |--------|-------|
-| **Background job success rate** | 100% (114/114) |
 | **P50 response latency** | 3.3s |
 | **Cost per call** | ~$0.08-0.15/min |
-| **Time to build** | 6 days, part-time |
 
 ---
 

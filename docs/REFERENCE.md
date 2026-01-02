@@ -6,8 +6,7 @@
 
 ## Demo
 
-<!-- Replace YOUR_VIDEO_ID with your actual YouTube video ID -->
-[![PhoneFix Demo](https://img.youtube.com/vi/YOUR_VIDEO_ID/maxresdefault.jpg)](https://www.youtube.com/watch?v=YOUR_VIDEO_ID)
+[![PhoneFix Demo](https://img.youtube.com/vi/tUcLhMSpCJ0/maxresdefault.jpg)](https://youtu.be/tUcLhMSpCJ0)
 
 **Try it yourself:** Call **+1 415 853 6485**
 
@@ -23,8 +22,8 @@ Example prompts:
 
 ```bash
 # 1. Clone and install
-git clone https://github.com/your-org/phonefix.git
-cd phonefix
+git clone https://github.com/Designedforusers/PhoneFix.git
+cd PhoneFix
 python -m venv venv && source venv/bin/activate
 pip install -e .
 
@@ -115,31 +114,31 @@ For background tasks ("fix this and call me back"):
 flowchart TB
     subgraph "1. Call Initiation"
         Phone["📱 Caller dials"] --> Twilio["Twilio receives call"]
-        Twilio -->|"POST /twilio/incoming"| Handler["handle_incoming_call()<br/><i>src/voice/handlers.py:78</i>"]
+        Twilio -->|"POST /twilio/incoming"| Handler["handle_incoming_call()"]
         Handler -->|"Returns TwiML"| TwiML["&lt;Say&gt; 'Connecting...'<br/>&lt;Stream url='/twilio/media-stream'/&gt;"]
         TwiML --> Twilio
     end
 
     subgraph "2. WebSocket Connection"
-        Twilio -->|"WebSocket upgrade"| WS["handle_media_stream()<br/><i>src/voice/handlers.py:158</i>"]
+        Twilio -->|"WebSocket upgrade"| WS["handle_media_stream()"]
         WS --> Parse["parse_telephony_websocket()<br/>extracts stream_sid, call_sid"]
-        Parse --> LoadCtx["_load_user_context(caller_phone)<br/><i>if DATABASE_URL set</i>"]
+        Parse --> LoadCtx["_load_user_context(caller_phone)"]
     end
 
     subgraph "3. Pipeline Initialization"
-        LoadCtx --> RunPipeline["run_sdk_pipeline()<br/><i>src/voice/sdk_pipeline.py:392</i>"]
-        RunPipeline --> Session["VoiceAgentSession()<br/><i>src/agent/sdk_client.py:478</i>"]
-        RunPipeline --> ZepSession["ZepSession()<br/><i>src/db/zep_memory.py:213</i>"]
+        LoadCtx --> RunPipeline["run_sdk_pipeline()"]
+        RunPipeline --> Session["VoiceAgentSession()"]
+        RunPipeline --> ZepSession["ZepSession()"]
         RunPipeline --> Transport["FastAPIWebsocketTransport"]
     end
 
     subgraph "4. Pipecat Pipeline"
         direction LR
-        TransportIn["transport.input()<br/><i>Twilio audio frames</i>"]
-        STT["DeepgramFluxSTTService<br/><i>model: flux-general-en</i>"]
-        Bridge["SDKBridgeProcessor<br/><i>sdk_pipeline.py:56</i>"]
-        TTS["CartesiaTTSService<br/><i>voice_id from settings</i>"]
-        TransportOut["transport.output()<br/><i>back to Twilio</i>"]
+        TransportIn["transport.input()"]
+        STT["DeepgramFluxSTTService"]
+        Bridge["SDKBridgeProcessor"]
+        TTS["CartesiaTTSService"]
+        TransportOut["transport.output()"]
         TransportIn --> STT --> Bridge --> TTS --> TransportOut
     end
 
@@ -153,18 +152,18 @@ flowchart TB
     end
 
     subgraph "6. Claude Agent SDK"
-        SDK["ClaudeSDKClient<br/><i>sdk_client.py:354</i>"]
+        SDK["ClaudeSDKClient"]
         SDK --> BuiltIn["Built-in Tools:<br/>Read, Write, Edit, Bash,<br/>Glob, Grep, NotebookEdit,<br/>Task, TodoWrite,<br/>WebFetch, WebSearch"]
-        SDK --> RenderMCP["Render MCP<br/><i>mcp.render.com/mcp</i><br/>21 tools"]
-        SDK --> ExaMCP["Exa MCP<br/><i>mcp.exa.ai/mcp</i><br/>web_search_exa,<br/>get_code_context_exa"]
-        SDK --> ProactiveMCP["Proactive MCP<br/><i>create_sdk_mcp_server()</i>"]
+        SDK --> RenderMCP["Render MCP<br/>21 tools"]
+        SDK --> ExaMCP["Exa MCP<br/>web_search_exa,<br/>get_code_context_exa"]
+        SDK --> ProactiveMCP["Proactive MCP"]
     end
 
     subgraph "7. Custom Tools (Proactive MCP)"
-        handoff["handoff_task<br/><i>sdk_client.py:65</i>"]
-        reminder["set_reminder<br/><i>sdk_client.py:175</i>"]
-        sms["send_sms<br/><i>sdk_client.py:158</i>"]
-        memory["update_user_memory<br/><i>sdk_client.py:302</i>"]
+        handoff["handoff_task"]
+        reminder["set_reminder"]
+        sms["send_sms"]
+        memory["update_user_memory"]
     end
 
     Transport --> |"on_client_connected"| 5. on_client_connected Event
@@ -180,77 +179,77 @@ flowchart TB
         User["User: 'Deploy and call me back'"]
         Bridge["SDKBridgeProcessor"]
         SDK["Claude Agent SDK"]
-        HandoffTool["mcp__proactive__handoff_task<br/><i>sdk_client.py:65</i>"]
-        
+        HandoffTool["mcp__proactive__handoff_task"]
+
         User --> Bridge --> SDK --> HandoffTool
     end
 
     subgraph "2. Task Persistence"
-        CreateTask["create_background_task()<br/><i>db/background_tasks.py</i>"]
+        CreateTask["create_background_task()"]
         Postgres[(Postgres<br/>background_tasks table)]
-        Enqueue["enqueue_background_task()<br/><i>tasks/queue.py:64</i>"]
+        Enqueue["enqueue_background_task()"]
         Redis[(Redis Queue)]
-        
+
         HandoffTool --> CreateTask --> Postgres
         CreateTask --> Enqueue --> Redis
     end
 
     subgraph "3. Worker Execution"
-        Worker["ARQ Worker<br/><i>tasks/worker.py:321</i>"]
+        Worker["ARQ Worker"]
         GetTask["get_background_task(task_id)"]
-        HeadlessSDK["Headless Claude Session<br/>query() function<br/><i>NOT ClaudeSDKClient</i>"]
-        
+        HeadlessSDK["Headless Claude Session<br/>query() function"]
+
         Redis --> Worker --> GetTask --> HeadlessSDK
     end
 
     subgraph "4. Worker MCP Servers"
-        WorkerRender["Render MCP<br/><i>same as voice</i>"]
-        WorkerExa["Exa MCP<br/><i>same as voice</i>"]
-        WorkerNote["NOTE: No Proactive MCP<br/><i>worker can't schedule callbacks</i>"]
-        
+        WorkerRender["Render MCP"]
+        WorkerExa["Exa MCP"]
+        WorkerNote["NOTE: No Proactive MCP<br/>worker can't schedule callbacks"]
+
         HeadlessSDK --> WorkerRender
         HeadlessSDK --> WorkerExa
     end
 
     subgraph "5. Task Completion"
-        Structured["structured_output<br/><i>TASK_RESULT_SCHEMA</i>"]
-        UpdateStatus["update_task_status()<br/><i>completed/failed</i>"]
-        Callback["initiate_callback()<br/><i>callbacks/outbound.py:36</i>"]
-        
+        Structured["structured_output<br/>TASK_RESULT_SCHEMA"]
+        UpdateStatus["update_task_status()"]
+        Callback["initiate_callback()"]
+
         HeadlessSDK --> Structured --> UpdateStatus --> Callback
     end
 
     subgraph "6. Outbound Call"
-        TwilioOut["Twilio outbound call<br/><i>with callbackContext param</i>"]
-        WS2["handle_media_stream()<br/><i>parses callbackContext</i>"]
-        Pipeline2["run_sdk_pipeline()<br/><i>call_type='outbound_task_complete'</i>"]
+        TwilioOut["Twilio outbound call"]
+        WS2["handle_media_stream()"]
+        Pipeline2["run_sdk_pipeline()<br/>call_type='outbound_task_complete'"]
         UserPhone["📱 User's Phone"]
-        
+
         Callback --> TwilioOut --> WS2 --> Pipeline2 --> UserPhone
     end
 ```
 
 ### Key Components Reference
 
-| Component | File | Line | Purpose |
-|-----------|------|------|---------|
-| FastAPI app | `src/main.py` | 64 | Routes: `/twilio/incoming`, `/twilio/media-stream` |
-| Incoming call handler | `src/voice/handlers.py` | 78 | Returns TwiML with `<Say>` + `<Stream>` |
-| WebSocket handler | `src/voice/handlers.py` | 158 | Calls `parse_telephony_websocket()`, `run_sdk_pipeline()` |
-| Voice pipeline | `src/voice/sdk_pipeline.py` | 392 | Creates Pipecat pipeline with STT/TTS/Bridge |
-| SDKBridgeProcessor | `src/voice/sdk_pipeline.py` | 56 | Bridges Pipecat frames ↔ Claude SDK |
-| VoiceAgentSession | `src/agent/sdk_client.py` | 478 | Manages `ClaudeSDKClient` lifecycle |
-| SDK options builder | `src/agent/sdk_client.py` | 354 | Configures MCP servers, allowed_tools |
-| Custom tools | `src/agent/sdk_client.py` | 65-350 | `@tool` decorated functions |
-| Background worker | `src/tasks/worker.py` | 321 | `WorkerSettings` class for ARQ |
-| Task execution | `src/tasks/worker.py` | 97 | `execute_background_task()` with headless SDK |
-| Outbound calls | `src/callbacks/outbound.py` | 36 | `initiate_callback()` builds TwiML |
-| Zep memory | `src/db/zep_memory.py` | 213 | `ZepSession` class |
-| Task queue | `src/tasks/queue.py` | 64 | `enqueue_background_task()` |
+| Component | File | Purpose |
+|-----------|------|---------|
+| FastAPI app | `src/main.py` | Routes: `/twilio/incoming`, `/twilio/media-stream` |
+| Incoming call handler | `src/voice/handlers.py` | `handle_incoming_call()` - returns TwiML |
+| WebSocket handler | `src/voice/handlers.py` | `handle_media_stream()` - runs pipeline |
+| Voice pipeline | `src/voice/sdk_pipeline.py` | `run_sdk_pipeline()` - Pipecat with STT/TTS |
+| SDKBridgeProcessor | `src/voice/sdk_pipeline.py` | Bridges Pipecat frames ↔ Claude SDK |
+| VoiceAgentSession | `src/agent/sdk_client.py` | Manages `ClaudeSDKClient` lifecycle |
+| SDK options builder | `src/agent/sdk_client.py` | `get_sdk_options()` - MCP servers, tools |
+| Custom tools | `src/agent/sdk_client.py` | `@tool` decorated functions |
+| Background worker | `src/tasks/worker.py` | `WorkerSettings` class for ARQ |
+| Task execution | `src/tasks/worker.py` | `execute_background_task()` - headless SDK |
+| Outbound calls | `src/callbacks/outbound.py` | `initiate_callback()` - builds TwiML |
+| Zep memory | `src/db/zep_memory.py` | `ZepSession` class |
+| Task queue | `src/tasks/queue.py` | `enqueue_background_task()` |
 
 ### Verified Tool Lists
 
-**Voice Pipeline (`sdk_client.py:404-450`):**
+**Voice Pipeline (`get_sdk_options()` in `sdk_client.py`):**
 ```python
 allowed_tools=[
     # File operations
@@ -281,7 +280,7 @@ allowed_tools=[
 ]
 ```
 
-**Background Worker (`worker.py:166-198`):**
+**Background Worker (`execute_background_task()` in `worker.py`):**
 ```python
 # Same built-in + Render + Exa tools
 # BUT: No Proactive MCP (worker can't schedule callbacks)
@@ -1484,11 +1483,11 @@ CMD ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "
 
 ### Code Reference: Critical Implementation Details
 
-These patterns are verified against the actual codebase. Line numbers reference the source files.
+These patterns are verified against the actual codebase.
 
 ### 1. Frame Timing with Pipecat
 
-**Source:** `src/voice/sdk_pipeline.py:469-485` (`on_client_connected` handler)
+**Source:** `on_client_connected` handler in `src/voice/sdk_pipeline.py`
 
 The pipeline must be ready before sending frames. Frames sent before `StartFrame` are dropped by Pipecat.
 
@@ -1506,7 +1505,7 @@ async def on_client_connected(transport, client):
 
 ### 2. Twilio Keepalive
 
-**Source:** `src/voice/sdk_pipeline.py:278-305` (`_process_user_input` goodbye handling)
+**Source:** `_process_user_input()` goodbye handling in `src/voice/sdk_pipeline.py`
 
 Twilio drops connections after ~30 seconds of silence. The goodbye sequence sends filler audio while compressing memory:
 
@@ -1520,7 +1519,7 @@ while not compress_task.done():
 
 ### 3. ClaudeAgentOptions vs Dict
 
-**Source:** `src/tasks/worker.py:148-165` (headless SDK setup)
+**Source:** `execute_background_task()` in `src/tasks/worker.py`
 
 The worker must use `ClaudeAgentOptions`, not a dict. This was a real bug that caused `'dict' object has no attribute 'can_use_tool'`:
 
@@ -1534,7 +1533,7 @@ query_options = ClaudeAgentOptions(cwd="/app", system_prompt="...")
 
 ### 4. Context Variables for Async Safety
 
-**Source:** `src/agent/sdk_client.py:38-58` (`_session_context_var`, `_set_session_context`, `_get_session_context`)
+**Source:** `_session_context_var` and helpers in `src/agent/sdk_client.py`
 
 Each concurrent call needs isolated context. Without `contextvars`, tools would access the wrong caller's phone number:
 
@@ -1551,7 +1550,7 @@ ctx = _session_context_var.get()
 
 ### 5. Graceful Degradation
 
-**Source:** `src/agent/sdk_client.py:130-145` (`handoff_task_tool` error handling)
+**Source:** `handoff_task_tool()` error handling in `src/agent/sdk_client.py`
 
 When Redis is unavailable, fall back to SMS notification:
 
@@ -1559,14 +1558,14 @@ When Redis is unavailable, fall back to SMS notification:
 try:
     await enqueue_background_task(task_id)
 except RedisUnavailableError:
-    # Fall back to SMS - src/agent/sdk_client.py:138
+    # Fall back to SMS
     await send_sms(phone, "[PhoneFix] Sorry, I couldn't schedule your task...")
     return {"is_error": True}
 ```
 
 ### 6. Fallback Callback Safety Net
 
-**Source:** `src/voice/sdk_pipeline.py:226-243` (`_schedule_fallback_callback`)
+**Source:** `_schedule_fallback_callback()` in `src/voice/sdk_pipeline.py`
 
 When user requests a callback but Claude forgets to call the tool, the goodbye handler schedules a fallback:
 
@@ -1577,11 +1576,11 @@ if self._callback_requested and not self._callback_scheduled:
     await self._schedule_fallback_callback(self._last_user_message)
 ```
 
-The fallback is cancelled if `handoff_task` succeeds (`src/tasks/queue.py:118` `cancel_fallback_reminder`).
+The fallback is cancelled if `handoff_task` succeeds via `cancel_fallback_reminder()` in `src/tasks/queue.py`.
 
 ### 7. Worker Uses `query()` Not `ClaudeSDKClient`
 
-**Source:** `src/tasks/worker.py:200-220`
+**Source:** `execute_background_task()` in `src/tasks/worker.py`
 
 The background worker uses the standalone `query()` function, not `ClaudeSDKClient`. This is intentional - the worker doesn't need session management:
 
@@ -1597,7 +1596,7 @@ async for msg in query(prompt=prompt, options=query_options):
 
 ### 8. MULTI_TENANT Mode Differences
 
-**Source:** `src/agent/sdk_client.py:339-350` (conditional tool loading)
+**Source:** `get_sdk_options()` in `src/agent/sdk_client.py`
 
 In `MULTI_TENANT=True` mode, additional repo management tools are available:
 
@@ -1613,7 +1612,7 @@ if settings.MULTI_TENANT:
 
 ### 9. Zep Persistence Happens Per-Turn
 
-**Source:** `src/voice/sdk_pipeline.py:365-380` (`_persist_to_zep`)
+**Source:** `_persist_to_zep()` in `src/voice/sdk_pipeline.py`
 
 Messages are persisted to Zep after each turn, not just on goodbye. This ensures abrupt hangups don't lose conversation:
 
