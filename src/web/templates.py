@@ -416,7 +416,7 @@ def render_connect_render_page(phone: str, github_username: str | None = None, r
 
 def render_success_page(phone: str | None = None) -> str:
     """Render the success page."""
-    twilio_number = settings.TWILIO_PHONE_NUMBER or "+1 (415) 853-6485"
+    twilio_number = settings.TWILIO_PHONE_NUMBER or "Not configured"
     
     content = f"""
         <div class="logo">✅</div>

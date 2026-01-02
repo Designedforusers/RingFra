@@ -6,7 +6,7 @@ from src.config import settings
 
 def render_landing_page() -> str:
     """Render the landing page."""
-    phone = settings.TWILIO_PHONE_NUMBER or "+1 (415) 853-6485"
+    phone = settings.TWILIO_PHONE_NUMBER or "Not configured"
     
     return f"""<!DOCTYPE html>
 <html lang="en">
