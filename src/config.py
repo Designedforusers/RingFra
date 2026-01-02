@@ -35,8 +35,8 @@ class Settings(BaseSettings):
     EXA_API_KEY: str | None = None
 
     # GitHub
-    GITHUB_TOKEN: str  # Default token for single-tenant mode
-    GITHUB_REPO_URL: str  # Default repo for single-tenant mode
+    GITHUB_TOKEN: str  # For gh CLI authentication
+    GITHUB_REPO_URL: str | None = None  # Optional: default repo for single-tenant mode
     
     # GitHub OAuth (for multi-tenant)
     GITHUB_CLIENT_ID: str | None = None

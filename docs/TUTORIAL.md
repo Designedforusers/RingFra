@@ -61,7 +61,6 @@ CARTESIA_API_KEY=...
 # Required - Infrastructure Access
 RENDER_API_KEY=rnd_...
 GITHUB_TOKEN=ghp_...
-GITHUB_REPO_URL=https://github.com/your-org/your-repo
 ```
 
 ---
@@ -177,7 +176,7 @@ For cross-call memory (remembers your preferences):
 
 ### Deploy to Render
 
-See [REFERENCE.md → Deployment](REFERENCE.md#deployment) for full `render.yaml` configuration.
+See [Technical Guide → Deployment](REFERENCE.md#deployment) for full `render.yaml` configuration.
 
 Quick version:
 1. Push repo to GitHub
@@ -230,7 +229,7 @@ For deep architecture details, see [REFERENCE.md](REFERENCE.md).
 
 | Doc | What's In It |
 |-----|--------------|
-| [**REFERENCE.md**](REFERENCE.md) | Architecture deep dive, all configuration options, production gotchas, performance benchmarks |
+| [**Technical Guide**](REFERENCE.md) | Architecture deep-dive, code patterns, gotchas, production learnings |
 | [**CLAUDE.md**](../CLAUDE.md) | Project context for Claude Code |
 
 ---

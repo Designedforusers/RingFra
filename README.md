@@ -71,7 +71,11 @@ pip install -e .
 export ANTHROPIC_API_KEY=sk-ant-...
 export TWILIO_ACCOUNT_SID=...
 export TWILIO_AUTH_TOKEN=...
-# ... (9 required keys total)
+export TWILIO_PHONE_NUMBER=+1...
+export DEEPGRAM_API_KEY=...
+export CARTESIA_API_KEY=...
+export RENDER_API_KEY=rnd_...
+export GITHUB_TOKEN=ghp_...
 
 # Run
 python -m uvicorn src.main:app --host 0.0.0.0 --port 8765
@@ -88,7 +92,7 @@ python -m uvicorn src.main:app --host 0.0.0.0 --port 8765
 | Doc | Purpose |
 |-----|---------|
 | [**TUTORIAL.md**](docs/TUTORIAL.md) | Step-by-step setup guide (15 min read) |
-| [**REFERENCE.md**](docs/REFERENCE.md) | Deep dive: architecture, gotchas, production learnings (full technical reference) |
+| [**Technical Guide**](docs/REFERENCE.md) | Architecture deep-dive, code patterns, gotchas, production learnings |
 | [**CLAUDE.md**](CLAUDE.md) | Project context for Claude Code |
 
 ---
@@ -130,7 +134,7 @@ Deploy to Render with one click using the included `render.yaml`:
 - **Redis**: Task queue
 - **Postgres**: User data and task history
 
-See [docs/REFERENCE.md](docs/REFERENCE.md#deployment) for full deployment guide.
+See [Technical Guide](docs/REFERENCE.md#deployment) for full deployment guide.
 
 ---
 

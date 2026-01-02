@@ -1,4 +1,4 @@
-# Building a Voice-Controlled On-Call Agent with Claude Agent SDK
+# PhoneFix Technical Guide
 
 > **Build an AI-powered on-call engineer you can call 24/7. Manage Render services, fix bugs, deploy code, and get callbacks when tasks complete—all through natural phone conversations.**
 
@@ -8,7 +8,7 @@
 
 [![PhoneFix Demo](https://img.youtube.com/vi/tUcLhMSpCJ0/maxresdefault.jpg)](https://youtu.be/tUcLhMSpCJ0)
 
-**Try it yourself:** Call **+1 415 853 6485**
+**Try it yourself:** Deploy your own instance and call your Twilio number
 
 Example prompts:
 - "Check my Render services"
@@ -36,7 +36,6 @@ export DEEPGRAM_API_KEY=your_key
 export CARTESIA_API_KEY=your_key
 export RENDER_API_KEY=rnd_...
 export GITHUB_TOKEN=ghp_...
-export GITHUB_REPO_URL=https://github.com/your-org/your-repo
 
 # 3. Start the server
 python -m uvicorn src.main:app --host 0.0.0.0 --port 8765
@@ -356,7 +355,9 @@ Call 2 (Thursday):
 
 ### What is Pipecat?
 
-**Pipecat** is a framework for building real-time voice AI applications. It provides:
+**Pipecat** is a framework for building real-time voice AI applications, built on Daily's real-time infrastructure. I chose Pipecat for its customization flexibility and active community.
+
+It provides:
 - **Transports** - WebSocket connections to Twilio
 - **Services** - STT (Deepgram), TTS (Cartesia)
 - **Processors** - Custom logic between input and output
@@ -426,7 +427,6 @@ class Settings(BaseSettings):
     CARTESIA_API_KEY: str
     RENDER_API_KEY: str
     GITHUB_TOKEN: str
-    GITHUB_REPO_URL: str
 
     # === Voice Settings ===
     VOICE_MODEL: str = "claude-sonnet-4-5-20250929"
@@ -455,7 +455,6 @@ DEEPGRAM_API_KEY=...
 CARTESIA_API_KEY=...
 RENDER_API_KEY=rnd_...
 GITHUB_TOKEN=ghp_...
-GITHUB_REPO_URL=https://github.com/your-org/your-repo
 
 # For background tasks (callbacks, reminders)
 REDIS_URL=redis://localhost:6379
