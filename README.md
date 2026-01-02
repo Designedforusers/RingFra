@@ -1,101 +1,140 @@
-# Render Voice Agent
+# PhoneFix
 
-Voice-controlled infrastructure management for Render. Call a phone number and manage your deployed applications using natural language.
+> **An AI-powered on-call engineer you can call 24/7.** Manage Render services, fix bugs, deploy code, and get callbacks when tasks complete—all through natural phone conversations.
 
-## Features
+[![Demo Video](https://img.youtube.com/vi/tUcLhMSpCJ0/maxresdefault.jpg)](https://www.youtube.com/watch?v=tUcLhMSpCJ0)
 
-- **Voice Commands**: Manage infrastructure by talking naturally
-- **Render Integration**: List services, view logs, scale, deploy, rollback
-- **Code Operations**: Analyze code, fix bugs, run tests, commit changes
-- **Real-time Voice**: Powered by Deepgram STT, Claude LLM, and Cartesia TTS
+---
 
-## Quick Start
+## What It Does
 
-### Prerequisites
+Call a phone number. Talk to Claude. Manage your infrastructure.
 
-- Python 3.11+
-- Node.js 20+ (for Claude Code CLI)
-- API keys for: Twilio, Anthropic, Deepgram, Cartesia, Render, GitHub
+```
+You: "Check my services for errors"
+AI:  "I found 3 errors in the API logs from the last hour.
+      Two are null pointer exceptions in the auth module,
+      one is a timeout connecting to Redis. Want me to look into fixing them?"
 
-### Setup
-
-```bash
-# Clone and setup
-git clone <your-repo>
-cd render-voice-agent
-
-# Run setup script
-./scripts/setup.sh
-
-# Configure environment
-cp .env.example .env
-# Edit .env with your API keys
-
-# Clone target repo (optional, for code operations)
-./scripts/clone_target_repo.sh
-
-# Run locally
-python -m src.main
+You: "Fix the auth issue and call me back when it's done"
+AI:  "Got it. I'll fix the auth bug and call you back."
+      [Hangs up, works autonomously, calls you back 10 minutes later]
+AI:  "Hey, I fixed the null pointer issue. It was a missing user check
+      in the login handler. I've pushed the fix and deployed to staging."
 ```
 
-### Deploy to Render
+---
 
-1. Push to GitHub
-2. Connect repo to Render
-3. Configure environment variables
-4. Deploy!
+## Production Stats
 
-## Voice Commands
+| Metric | Value |
+|--------|-------|
+| **Background job success rate** | 100% (114/114) |
+| **P50 response latency** | 3.3s |
+| **Cost per call** | ~$0.08-0.15/min |
+| **Time to build** | 6 days, part-time |
 
-| Say This | Does This |
-|----------|-----------|
-| "What's running?" | Lists all services |
-| "Show me the logs" | Gets recent logs |
-| "What's wrong?" | Analyzes errors |
-| "Fix the auth bug" | Finds and fixes the bug |
-| "Scale up the API" | Increases instances |
-| "Deploy the latest" | Triggers deployment |
-| "Roll it back" | Rollbacks to previous |
+---
+
+## Key Features
+
+- **Voice-first**: Natural phone conversations, not chat interfaces
+- **Autonomous execution**: "Fix it and call me back" actually works
+- **Full tool access**: Same capabilities as Claude Code (file ops, git, bash, web search)
+- **Render-native**: Deep integration with Render MCP for infrastructure management
+- **Persistent memory**: Remembers your preferences across calls (via Zep)
+- **Callback system**: Background tasks with proactive phone callbacks when done
+
+---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     Render Server                            │
-│  ┌────────────┐   ┌────────────┐   ┌──────────────────────┐  │
-│  │   Twilio   │──▶│  Pipecat   │──▶│  Claude + Tools      │  │
-│  │  Webhook   │   │  Pipeline  │   │  - Render API        │  │
-│  └────────────┘   │  - STT     │   │  - Claude Code CLI   │  │
-│                   │  - LLM     │   └──────────────────────┘  │
-│                   │  - TTS     │                              │
-│                   └────────────┘                              │
-└─────────────────────────────────────────────────────────────┘
+Phone Call → Twilio → Pipecat (STT/TTS) → Claude Agent SDK
+                                              ↓
+                                         Tools:
+                                         - Render MCP (logs, deploy, metrics)
+                                         - Bash/gh CLI (git operations)
+                                         - Proactive (SMS, callbacks, reminders)
 ```
 
-## API Endpoints
+---
 
-- `GET /` - Service info
-- `GET /health` - Health check
-- `POST /twilio/incoming` - Twilio webhook for calls
-- `WS /twilio/media-stream` - WebSocket for audio streaming
-
-## Configuration
-
-See `.env.example` for all configuration options.
-
-## Development
+## Quick Start
 
 ```bash
-# Install dev dependencies
-pip install -e ".[dev]"
+# Clone and install
+git clone https://github.com/Designedforusers/PhoneFix.git
+cd PhoneFix
+python -m venv venv && source venv/bin/activate
+pip install -e .
 
-# Run tests
-pytest
+# Set environment variables (see .env.example)
+export ANTHROPIC_API_KEY=sk-ant-...
+export TWILIO_ACCOUNT_SID=...
+export TWILIO_AUTH_TOKEN=...
+# ... (9 required keys total)
 
-# Format code
-black src/ tests/
-ruff check src/ tests/
+# Run
+python -m uvicorn src.main:app --host 0.0.0.0 --port 8765
+
+# Expose with ngrok, configure Twilio webhook, call your number
 ```
+
+**Full setup guide:** [docs/TUTORIAL.md](docs/TUTORIAL.md)
+
+---
+
+## Documentation
+
+| Doc | Purpose |
+|-----|---------|
+| [**TUTORIAL.md**](docs/TUTORIAL.md) | Step-by-step setup guide (15 min read) |
+| [**REFERENCE.md**](docs/REFERENCE.md) | Deep dive: architecture, gotchas, production learnings (full technical reference) |
+| [**CLAUDE.md**](CLAUDE.md) | Project context for Claude Code |
+
+---
+
+## Tech Stack
+
+| Component | Technology |
+|-----------|------------|
+| Voice Pipeline | [Pipecat](https://github.com/pipecat-ai/pipecat) |
+| AI | [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python) |
+| STT | Deepgram Flux |
+| TTS | Cartesia |
+| Telephony | Twilio |
+| Infrastructure | Render (MCP integration) |
+| Memory | Zep Cloud |
+| Task Queue | ARQ + Redis |
+
+---
+
+## Example Commands
+
+| Say This | What Happens |
+|----------|--------------|
+| "Check my services" | Lists all Render services |
+| "Any errors in the logs?" | Fetches and analyzes logs |
+| "Deploy to staging" | Triggers deployment |
+| "What's using the most CPU?" | Gets metrics, identifies issues |
+| "Fix it and call me back" | Hands off to background worker, calls you when done |
+| "Remind me in 30 minutes" | Schedules a callback |
+
+---
+
+## Deployment
+
+Deploy to Render with one click using the included `render.yaml`:
+
+- **Web service**: Handles incoming calls and voice pipeline
+- **Worker**: Executes background tasks autonomously
+- **Redis**: Task queue
+- **Postgres**: User data and task history
+
+See [docs/REFERENCE.md](docs/REFERENCE.md#deployment) for full deployment guide.
+
+---
 
 ## License
 

@@ -93,7 +93,7 @@ black src/ tests/
 - **Worker SDK**: Must use `ClaudeAgentOptions` object, NOT a dict (see commit d5b5d36)
 
 ## Phone Number
-+1 415 853 6485
+Your Twilio number (set in TWILIO_PHONE_NUMBER env var)
 
 ## Render Services
 - Web: `render-voice-agent` (srv-d53qa0re5dus73b3b40g)
