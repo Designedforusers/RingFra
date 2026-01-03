@@ -1233,7 +1233,7 @@ async def handle_incoming_call(request: Request) -> Response:
     response = VoiceResponse()
 
     # Initial greeting while WebSocket connects
-    response.say("Connecting you to the infrastructure assistant.", voice="Polly.Matthew")
+    response.say("Connecting you to the Render infrastructure assistant.", voice="Polly.Matthew")
 
     # Start recording
     start = Start()
