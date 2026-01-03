@@ -48,12 +48,17 @@ AI:  "Hey, I fixed the null pointer issue. It was a missing user check
 ## Architecture
 
 ```
-Phone Call → Twilio → Deepgram (STT) → Claude Agent SDK → Cartesia (TTS) → Twilio
-                                              ↓
-                                         Tools:
-                                         - Render MCP (logs, deploy, metrics)
-                                         - Bash/gh CLI (git operations)
-                                         - Proactive (SMS, callbacks, reminders)
+Phone Call → Twilio → [Pipecat Pipeline] → Twilio → Phone
+                            │
+                            ├── Deepgram Flux (STT)
+                            ├── SDK Bridge Processor
+                            ├── Cartesia (TTS)
+                            │
+                            └── Claude Agent SDK
+                                      │
+                                      ├── Render MCP (logs, deploy, metrics)
+                                      ├── Bash/gh CLI (git operations)
+                                      └── Proactive (SMS, callbacks, reminders)
 ```
 
 ---

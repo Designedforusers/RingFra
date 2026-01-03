@@ -7,12 +7,17 @@ Voice-controlled infrastructure management for Render. Call the phone number, ta
 
 ## Architecture
 ```
-Phone Call → Twilio → Pipecat (STT/TTS) → Claude Agent SDK
-                                              ↓
-                                         Tools:
-                                         - Render MCP (logs, deploy, metrics)
-                                         - Bash/gh CLI (git operations)
-                                         - Proactive (SMS, callbacks, reminders)
+Phone Call → Twilio → [Pipecat Pipeline] → Twilio → Phone
+                            │
+                            ├── Deepgram Flux (STT)
+                            ├── SDK Bridge Processor
+                            ├── Cartesia (TTS)
+                            │
+                            └── Claude Agent SDK
+                                      │
+                                      ├── Render MCP (logs, deploy, metrics)
+                                      ├── Bash/gh CLI (git operations)
+                                      └── Proactive (SMS, callbacks, reminders)
 ```
 
 ## Key Files
