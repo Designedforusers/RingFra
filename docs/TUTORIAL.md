@@ -190,19 +190,16 @@ Quick version:
 ## Architecture Overview
 
 ```
-Phone Call → Twilio → Your Server → Pipecat Pipeline
-                                        ↓
-                          ┌─────────────────────────┐
-                          │ Deepgram (STT)          │
-                          │ Claude Agent SDK        │
-                          │ Cartesia (TTS)          │
-                          └─────────────────────────┘
-                                        ↓
-                                  Tools Available:
-                                  - Render MCP (20 tools)
-                                  - File ops (Read, Write, Edit)
-                                  - Bash, Git, Web Search
-                                  - Custom (callbacks, SMS)
+Phone ←→ Twilio ←→ Pipecat [Deepgram STT → SDK Bridge → Cartesia TTS]
+                                              ↓
+                                       Claude Agent SDK
+                                              ↓
+                                 ┌────────────┼────────────┐
+                                 │            │            │
+                            Render MCP    Bash/gh     Proactive
+                            (deploy,      (git ops)   (callbacks,
+                             logs,                     SMS)
+                             metrics)
 ```
 
 For deep architecture details, see [REFERENCE.md](REFERENCE.md).
