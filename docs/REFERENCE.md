@@ -114,7 +114,7 @@ flowchart TB
     subgraph "1. Call Initiation"
         Phone["📱 Caller dials"] --> Twilio["Twilio receives call"]
         Twilio -->|"POST /twilio/incoming"| Handler["handle_incoming_call()"]
-        Handler -->|"Returns TwiML"| TwiML["&lt;Say&gt; 'Connecting...'<br/>&lt;Stream url='/twilio/media-stream'/&gt;"]
+        Handler -->|"Returns TwiML"| TwiML["&lt;Say&gt; 'Connecting you to the Render infrastructure assistant.'<br/>&lt;Stream url='/twilio/media-stream'/&gt;"]
         TwiML --> Twilio
     end
 
@@ -146,7 +146,7 @@ flowchart TB
         ZepStart["zep_session.start()<br/><i>warms cache, loads context</i>"]
         SDKConnect["session.connect()<br/><i>ClaudeSDKClient</i>"]
         MarkReady["sdk_bridge.mark_session_ready()"]
-        Greeting["push_frame(TextFrame)<br/>'Hey, what can I help with?'"]
+        Greeting["push_frame(TextFrame)<br/>'Hey, I'm your on-call engineer. What can I help you with?'"]
         ZepStart --> SDKConnect --> MarkReady --> Greeting
     end
 
