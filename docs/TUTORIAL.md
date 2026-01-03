@@ -1,4 +1,4 @@
-# PhoneFix: Step-by-Step Setup Guide
+# RingFra: Step-by-Step Setup Guide
 
 > Get from zero to your first phone call in ~30 minutes.
 
@@ -26,8 +26,8 @@ You'll need accounts with these services. All have free tiers.
 ## Step 2: Clone and Install (2 min)
 
 ```bash
-git clone https://github.com/Designedforusers/PhoneFix.git
-cd PhoneFix
+git clone https://github.com/Designedforusers/RingFra.git
+cd RingFra
 
 # Create virtual environment
 python -m venv venv
@@ -219,6 +219,8 @@ For deep architecture details, see [REFERENCE.md](REFERENCE.md).
 **Total for testing:** Free with trial credits
 
 **Production estimate:** ~$0.08-0.15/min of call time
+
+*Pricing estimates based on actual usage logs from testing. Rates may vary—check each provider's current pricing.*
 
 ---
 

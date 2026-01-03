@@ -1,4 +1,4 @@
-# PhoneFix Technical Guide
+# RingFra Technical Guide
 
 > **Build an AI-powered on-call engineer you can call 24/7. Manage Render services, fix bugs, deploy code, and get callbacks when tasks complete—all through natural phone conversations.**
 
@@ -6,7 +6,7 @@
 
 ## Demo
 
-[![PhoneFix Demo](https://img.youtube.com/vi/tUcLhMSpCJ0/maxresdefault.jpg)](https://youtu.be/tUcLhMSpCJ0)
+[![RingFra Demo](https://img.youtube.com/vi/tUcLhMSpCJ0/maxresdefault.jpg)](https://youtu.be/tUcLhMSpCJ0)
 
 **Try it yourself:** Deploy your own instance and call your Twilio number
 
@@ -22,8 +22,8 @@ Example prompts:
 
 ```bash
 # 1. Clone and install
-git clone https://github.com/Designedforusers/PhoneFix.git
-cd PhoneFix
+git clone https://github.com/Designedforusers/RingFra.git
+cd RingFra
 python -m venv venv && source venv/bin/activate
 pip install -e .
 
@@ -56,6 +56,8 @@ ngrok http 8765
 | Cartesia | 1000 chars free | ~$0.015/1K chars TTS |
 | Anthropic | None | ~$0.01-0.05/call |
 | Render | Free tier available | $7+/mo for production |
+
+*Pricing estimates based on actual usage logs from testing. Rates may vary—check each provider's current pricing.*
 
 ---
 
@@ -1438,29 +1440,84 @@ Prevent verbose error dumps:
 ```yaml
 services:
   - type: web
-    name: phonefix
+    name: ringfra
     runtime: docker
-    plan: standard
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     healthCheckPath: /health
     envVars:
-      - key: ANTHROPIC_API_KEY
-        sync: false
       - key: TWILIO_ACCOUNT_SID
         sync: false
-      # ... other env vars
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_PHONE_NUMBER
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: DEEPGRAM_API_KEY
+        sync: false
+      - key: CARTESIA_API_KEY
+        sync: false
+      - key: RENDER_API_KEY
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: APP_ENV
+        value: production
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: ringfra-redis
+          property: connectionString
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ringfra-db
+          property: connectionString
+    scaling:
+      minInstances: 1
+      maxInstances: 3
 
   - type: worker
-    name: phonefix-worker
+    name: ringfra-worker
     runtime: docker
     plan: standard
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     dockerCommand: python -m arq src.tasks.worker.WorkerSettings
+    envVars:
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_PHONE_NUMBER
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: RENDER_API_KEY
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: APP_ENV
+        value: production
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: ringfra-redis
+          property: connectionString
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ringfra-db
+          property: connectionString
 
 databases:
-  - name: phonefix-db
-    plan: starter
-  - name: phonefix-redis
+  - name: ringfra-redis
     type: redis
-    plan: starter
+    plan: free
+    maxmemoryPolicy: allkeys-lru
+
+  - name: ringfra-db
+    databaseName: ringfra
+    plan: free
 ```
 
 ### Dockerfile
@@ -1468,19 +1525,51 @@ databases:
 ```dockerfile
 FROM python:3.11-slim
 
-WORKDIR /app
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN apt-get update && apt-get install -y git curl && rm -rf /var/lib/apt/lists/*
+# Install Node.js (required for Claude Code CLI)
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs
+
+# Install GitHub CLI
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+    && apt-get update \
+    && apt-get install -y gh \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install Claude Code CLI
-RUN curl -fsSL https://claude.ai/install.sh | sh
+RUN npm install -g @anthropic-ai/claude-code
 
-COPY pyproject.toml .
-RUN pip install -e .
+WORKDIR /app
 
-COPY . .
+# Copy and install dependencies
+COPY pyproject.toml README.md ./
+RUN pip install --no-cache-dir .
 
-CMD ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8765"]
+# Copy application code
+COPY src/ src/
+COPY scripts/ scripts/
+
+# Create non-root user (required for Claude Code CLI)
+RUN useradd -m -s /bin/bash appuser \
+    && mkdir -p /app/target-repo /app/logs \
+    && chown -R appuser:appuser /app
+
+USER appuser
+
+EXPOSE 8765
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8765/health || exit 1
+
+CMD ["python", "-m", "src.main"]
 ```
 
 ### Twilio Configuration
@@ -1573,7 +1662,7 @@ try:
     await enqueue_background_task(task_id)
 except RedisUnavailableError:
     # Fall back to SMS
-    await send_sms(phone, "[PhoneFix] Sorry, I couldn't schedule your task...")
+    await send_sms(phone, "[RingFra] Sorry, I couldn't schedule your task...")
     return {"is_error": True}
 ```
 

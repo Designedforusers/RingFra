@@ -100,6 +100,6 @@ black src/ tests/
 Your Twilio number (set in TWILIO_PHONE_NUMBER env var)
 
 ## Render Services
-- Web: `phonefix` (your web service)
-- DB: `phonefix-db`
-- Redis: `phonefix-redis`
+- Web: `ringfra` (your web service)
+- DB: `ringfra-db`
+- Redis: `ringfra-redis`

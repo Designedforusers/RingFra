@@ -1,4 +1,4 @@
-# PhoneFix
+# RingFra
 
 > **An AI-powered on-call engineer you can call 24/7.** Manage Render services, fix bugs, deploy code, and get callbacks when tasks complete—all through natural phone conversations.
 
@@ -66,8 +66,8 @@ Phone ←→ Twilio ←→ Pipecat [Deepgram STT → SDK Bridge → Cartesia TTS
 
 ```bash
 # Clone and install
-git clone https://github.com/Designedforusers/PhoneFix.git
-cd PhoneFix
+git clone https://github.com/Designedforusers/RingFra.git
+cd RingFra
 python -m venv venv && source venv/bin/activate
 pip install -e .
 
