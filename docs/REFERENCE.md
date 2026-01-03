@@ -165,9 +165,9 @@ flowchart TB
         memory["update_user_memory"]
     end
 
-    Transport --> |"on_client_connected"| 5. on_client_connected Event
+    Transport -->|"on_client_connected"| ZepStart
     Bridge -->|"session.query(text)"| SDK
-    ProactiveMCP --> 7. Custom Tools
+    ProactiveMCP --> handoff
 ```
 
 ### Background Task Flow
