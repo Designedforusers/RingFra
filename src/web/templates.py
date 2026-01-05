@@ -1,6 +1,10 @@
 """
 Simple HTML templates for signup flow.
 
+NOTE: This module is scaffolding for multi-tenant mode where users can
+sign up via web and connect their GitHub/Render accounts. Not used in
+the current single-tenant implementation but kept for future expansion.
+
 Uses inline HTML to avoid template engine dependencies.
 """
 
