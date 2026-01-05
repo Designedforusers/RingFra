@@ -1,8 +1,12 @@
 # RingFra
 
+**[ringfra.dev](https://ringfra.dev)**
+
 > **An AI-powered on-call engineer you can call 24/7.** Manage Render services, fix bugs, deploy code, and get callbacks when tasks complete—all through natural phone conversations.
 
 [![Demo Video](https://img.youtube.com/vi/tUcLhMSpCJ0/maxresdefault.jpg)](https://www.youtube.com/watch?v=tUcLhMSpCJ0)
+
+**[Watch the Tutorial](https://youtu.be/rUTlpQbNw3s)** - Step-by-step guide to building this project
 
 ---
 
