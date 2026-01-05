@@ -2,6 +2,8 @@
 
 **[ringfra.dev](https://ringfra.dev)**
 
+[![RingFra](docs/hero.webp)](https://ringfra.dev)
+
 > **An AI-powered on-call engineer you can call 24/7.** Manage Render services, fix bugs, deploy code, and get callbacks when tasks complete—all through natural phone conversations.
 
 | Demo | Tutorial |
