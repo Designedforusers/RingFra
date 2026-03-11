@@ -108,10 +108,15 @@ async def handoff_task_tool(args: dict[str, Any]) -> dict[str, Any]:
         }
 
     if not user_id:
-        return {
-            "content": [{"type": "text", "text": "No user context available. Background tasks require an authenticated user."}],
-            "is_error": True,
-        }
+        # In single-tenant mode, use a default user ID so background tasks still work
+        if not settings.MULTI_TENANT:
+            user_id = "owner"
+            logger.info("handoff_task: No user_id found, using 'owner' for single-tenant mode")
+        else:
+            return {
+                "content": [{"type": "text", "text": "No user context available. Background tasks require an authenticated user."}],
+                "is_error": True,
+            }
 
     import json
     plan_raw = args.get("plan", {})
@@ -604,6 +609,9 @@ def get_sdk_options(
         env_vars["GITHUB_TOKEN"] = github_token  # Some tools use this
 
     return ClaudeAgentOptions(
+        # Use latest Sonnet 4.6 for best performance
+        model=settings.VOICE_MODEL,
+
         # Working directory for file operations
         cwd=working_dir,
 

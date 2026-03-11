@@ -147,7 +147,7 @@ async def trigger_claude_review(
     repo: str,
     pr_number: int,
     github_token: str,
-    model: str = "claude-sonnet-4-20250514",
+    model: str = "claude-sonnet-4-6",
     effort: Literal["low", "medium", "high"] = "medium",
 ) -> dict | None:
     """

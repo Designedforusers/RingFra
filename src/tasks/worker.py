@@ -230,6 +230,7 @@ Execute each step. When done, provide a clear summary of what happened."""
     # Build query options with structured output for reliable result extraction
     # Full tool access - headless worker needs same capabilities as voice agent
     query_options = ClaudeAgentOptions(
+        model="claude-sonnet-4-6",
         cwd=cwd,
         env=env_vars,
         system_prompt=system_prompt,

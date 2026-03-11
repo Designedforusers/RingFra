@@ -326,7 +326,7 @@ Keep under 25 words."""
 
 async def trigger_pr_review(
     pr_number: int,
-    model: str = "claude-sonnet-4-20250514",
+    model: str = "claude-sonnet-4-6",
     effort: str = "medium",
 ) -> str:
     """
@@ -496,7 +496,7 @@ def parse_ship_intent(user_message: str) -> dict:
         "test_strategy": TestStrategy.CI,
         "review_strategy": ReviewStrategy.CLAUDE,
         "auto_merge": False,
-        "review_model": "claude-sonnet-4-20250514",
+        "review_model": "claude-sonnet-4-6",
         "review_effort": "medium",
     }
     
@@ -518,7 +518,7 @@ def parse_ship_intent(user_message: str) -> dict:
     
     # Model parsing
     if "opus" in msg:
-        result["review_model"] = "claude-opus-4-20250514"
+        result["review_model"] = "claude-opus-4-6"
     
     # Effort parsing
     if any(phrase in msg for phrase in ["thorough", "careful", "deep", "high effort"]):

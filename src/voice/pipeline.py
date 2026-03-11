@@ -176,8 +176,8 @@ async def run_pipeline(
         model=settings.STT_MODEL,
     )
 
-    # === Language Model (Claude Sonnet 4.5 - latest model) ===
-    # Explicitly use claude-sonnet-4-5-20250929 for best performance
+    # === Language Model (Claude Sonnet 4.6 - latest model) ===
+    # Explicitly use claude-sonnet-4-6 for best performance
     model_name = settings.VOICE_MODEL
     logger.info(f"Using LLM model: {model_name}")
     llm = AnthropicLLMService(
@@ -355,7 +355,7 @@ async def _save_session_memory(user_id, messages: list) -> None:
     
     try:
         response = await client.messages.create(
-            model="claude-sonnet-4-5-20250929",
+            model="claude-sonnet-4-6",
             max_tokens=500,
             messages=[{
                 "role": "user",

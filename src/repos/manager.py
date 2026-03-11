@@ -850,7 +850,7 @@ async def ship_changes(
     test_strategy: TestStrategy = TestStrategy.CI,
     local_test_command: str | None = None,
     review_strategy: ReviewStrategy = ReviewStrategy.CLAUDE,
-    review_model: str = "claude-sonnet-4-20250514",
+    review_model: str = "claude-sonnet-4-6",
     review_effort: str = "medium",
     auto_merge: bool = False,
 ) -> TaskResult:
