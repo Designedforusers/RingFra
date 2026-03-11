@@ -255,6 +255,110 @@ class TestWorkerStartupValidation:
             logger.remove(handler_id)
 
 
+class TestWorkerCallbackOnSuccess:
+    """Test that worker calls back on task completion."""
+
+    @pytest.mark.asyncio
+    async def test_worker_callback_on_success(self):
+        """Task completes → initiate_callback called with correct context."""
+        from src.tasks.worker import execute_background_task
+
+        mock_task = {
+            "phone": "+1234567890",
+            "user_id": UUID("12345678-1234-5678-1234-567812345678"),
+            "plan": {"objective": "Run tests", "steps": ["pytest"]},
+            "task_type": "run_tests",
+        }
+
+        mock_result_message = MagicMock(spec=ResultMessage)
+        mock_result_message.is_error = False
+        mock_result_message.num_turns = 2
+        mock_result_message.structured_output = {
+            "summary": "All 42 tests passed",
+            "success": True,
+            "details": {"passed": 42, "failed": 0},
+            "action_items": [],
+        }
+        mock_result_message.total_cost_usd = 0.01
+
+        async def mock_query(*args, **kwargs):
+            yield mock_result_message
+
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}, clear=False):
+            with patch("shutil.which", return_value="/usr/bin/claude"):
+                with patch("src.db.background_tasks.get_background_task", new_callable=AsyncMock, return_value=mock_task):
+                    with patch("src.db.background_tasks.update_task_status", new_callable=AsyncMock):
+                        with patch("src.db.users.get_user_credentials", new_callable=AsyncMock, return_value=None):
+                            with patch("src.db.users.get_user_repos", new_callable=AsyncMock, return_value=None):
+                                with patch("claude_agent_sdk.query", side_effect=mock_query):
+                                    with patch("src.tasks.worker.initiate_callback", new_callable=AsyncMock) as mock_callback:
+                                        with patch("src.tasks.worker.send_sms", new_callable=AsyncMock):
+                                            result = await execute_background_task({}, "test-task-id")
+
+        assert result["status"] == "completed"
+        mock_callback.assert_called_once()
+
+        # Verify callback context has all required fields
+        cb_kwargs = mock_callback.call_args[1]
+        assert cb_kwargs["callback_type"] == "task_complete"
+        assert cb_kwargs["phone"] == "+1234567890"
+        ctx = cb_kwargs["context"]
+        assert ctx["task_type"] == "run_tests"
+        assert ctx["summary"] == "All 42 tests passed"
+        assert ctx["success"] is True
+        assert ctx["status"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_worker_sms_fallback_on_callback_failure(self):
+        """Callback fails → SMS sent instead."""
+        from src.tasks.worker import execute_background_task
+
+        mock_task = {
+            "phone": "+1234567890",
+            "user_id": UUID("12345678-1234-5678-1234-567812345678"),
+            "plan": {"objective": "Deploy", "steps": ["Deploy"]},
+            "task_type": "deploy",
+        }
+
+        mock_result_message = MagicMock(spec=ResultMessage)
+        mock_result_message.is_error = False
+        mock_result_message.num_turns = 1
+        mock_result_message.structured_output = {"summary": "Deployed", "success": True}
+        mock_result_message.total_cost_usd = 0.01
+
+        async def mock_query(*args, **kwargs):
+            yield mock_result_message
+
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}, clear=False):
+            with patch("shutil.which", return_value="/usr/bin/claude"):
+                with patch("src.db.background_tasks.get_background_task", new_callable=AsyncMock, return_value=mock_task):
+                    with patch("src.db.background_tasks.update_task_status", new_callable=AsyncMock):
+                        with patch("src.db.users.get_user_credentials", new_callable=AsyncMock, return_value=None):
+                            with patch("src.db.users.get_user_repos", new_callable=AsyncMock, return_value=None):
+                                with patch("claude_agent_sdk.query", side_effect=mock_query):
+                                    with patch("src.tasks.worker.initiate_callback", new_callable=AsyncMock, side_effect=Exception("Twilio down")):
+                                        with patch("src.tasks.worker.send_sms", new_callable=AsyncMock) as mock_sms:
+                                            result = await execute_background_task({}, "test-task-id")
+
+        assert result["status"] == "completed"
+        mock_sms.assert_called_once()
+        sms_args = mock_sms.call_args
+        assert "+1234567890" in sms_args[1].get("phone", sms_args[0][0] if sms_args[0] else "")
+
+    @pytest.mark.asyncio
+    async def test_worker_handles_missing_task(self):
+        """Task not in DB → returns error, doesn't crash."""
+        from src.tasks.worker import execute_background_task
+
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}, clear=False):
+            with patch("shutil.which", return_value="/usr/bin/claude"):
+                with patch("src.db.background_tasks.get_background_task", new_callable=AsyncMock, return_value=None):
+                    result = await execute_background_task({}, "nonexistent-task-id")
+
+        assert "error" in result
+        assert "not found" in result["error"].lower()
+
+
 class TestTaskResultSchema:
     """Test TASK_RESULT_SCHEMA validity."""
 

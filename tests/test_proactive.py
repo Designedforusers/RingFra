@@ -86,6 +86,72 @@ class TestCallbackRouter:
         assert "92%" in event.summary
 
 
+class TestFallbackReminderCancellation:
+    """Test the fallback reminder safety net."""
+
+    @pytest.mark.asyncio
+    async def test_handoff_cancels_fallback_reminder(self):
+        """cancel_fallback_reminder called after successful handoff."""
+        from src.agent.sdk_client import handoff_task_tool, _set_session_context
+
+        _set_session_context(
+            user_context={"user_id": "user-123"},
+            caller_phone="+1234567890",
+        )
+
+        with patch("src.agent.sdk_client.settings") as mock_settings:
+            mock_settings.MULTI_TENANT = False
+            with patch("src.db.background_tasks.create_background_task", new_callable=AsyncMock, return_value="task-abc"):
+                with patch("src.tasks.queue.enqueue_background_task", new_callable=AsyncMock):
+                    with patch("src.tasks.queue.cancel_fallback_reminder", new_callable=AsyncMock) as mock_cancel:
+                        result = await handoff_task_tool.handler({
+                            "task_type": "deploy",
+                            "plan": {"objective": "Deploy", "steps": ["Deploy"]},
+                            "notify_on": "both",
+                        })
+
+        assert result.get("is_error") is None or result.get("is_error") is False
+        mock_cancel.assert_called_once_with("+1234567890")
+
+
+class TestCallbackIntentDetection:
+    """Test callback intent detection in the voice pipeline."""
+
+    def test_callback_phrases_detected(self):
+        """Phrases like 'call me back', 'let me know' are detected."""
+        from src.voice.sdk_pipeline import SDKBridgeProcessor
+
+        # Create a minimal processor (session doesn't matter for detection)
+        processor = SDKBridgeProcessor(session=None)
+
+        positive_phrases = [
+            "deploy it and call me back",
+            "let me know when it's done",
+            "notify me when the tests finish",
+            "ring me when it's live",
+            "text me when you're done",
+        ]
+
+        for phrase in positive_phrases:
+            assert processor._has_callback_intent(phrase), f"Should detect callback intent: '{phrase}'"
+
+    def test_non_callback_phrases_not_detected(self):
+        """Normal phrases are not flagged as callback intent."""
+        from src.voice.sdk_pipeline import SDKBridgeProcessor
+
+        processor = SDKBridgeProcessor(session=None)
+
+        negative_phrases = [
+            "check the logs",
+            "deploy to staging",
+            "what's the CPU usage",
+            "fix the bug in auth",
+        ]
+
+        for phrase in negative_phrases:
+            assert not processor._has_callback_intent(phrase), f"Should NOT detect callback intent: '{phrase}'"
+
+
 class TestPrompts:
     """Tests for callback prompts."""
 

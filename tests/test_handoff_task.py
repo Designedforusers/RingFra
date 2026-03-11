@@ -192,32 +192,139 @@ class TestCreateBackgroundTask:
     async def test_create_background_task_passes_dict_directly(self):
         """Test that create_background_task passes dict directly (codec handles serialization)."""
         from src.db.background_tasks import create_background_task
-        
+
         mock_conn = AsyncMock()
         mock_conn.fetchrow = AsyncMock(return_value={"id": UUID("12345678-1234-5678-1234-567812345678")})
-        
+
         mock_pool = AsyncMock()
         mock_pool.acquire = MagicMock(return_value=AsyncMock(__aenter__=AsyncMock(return_value=mock_conn), __aexit__=AsyncMock()))
-        
+
         with patch("src.db.background_tasks.get_pool", return_value=mock_pool):
             plan = {"objective": "Test", "steps": ["Step 1"]}
-            
+
             task_id = await create_background_task(
                 user_id=UUID("12345678-1234-5678-1234-567812345678"),
                 phone="+1234567890",
                 task_type="test",
                 plan=plan
             )
-            
+
             # Verify fetchrow was called
             mock_conn.fetchrow.assert_called_once()
-            
+
             # Get the actual call arguments
             call_args = mock_conn.fetchrow.call_args
-            
+
             # The 4th positional arg should be the dict directly (codec handles JSONB)
             plan_arg = call_args[0][4]  # SQL is [0], then user_id, phone, task_type, plan
-            
+
             # Should be a dict (codec set in connection.py handles serialization)
             assert isinstance(plan_arg, dict)
             assert plan_arg == plan
+
+
+class TestSingleTenantFallback:
+    """Test the single-tenant user_id fallback that prevents the demo failure."""
+
+    @pytest.mark.asyncio
+    async def test_handoff_single_tenant_uses_owner_id(self):
+        """No user_id + MULTI_TENANT=False → uses 'owner' and succeeds."""
+        from src.agent.sdk_client import handoff_task_tool, _set_session_context
+
+        _set_session_context(user_context={}, caller_phone="+1234567890")
+
+        mock_task_id = "task-123"
+        with patch("src.agent.sdk_client.settings") as mock_settings:
+            mock_settings.MULTI_TENANT = False
+            with patch("src.db.background_tasks.create_background_task", new_callable=AsyncMock, return_value=mock_task_id) as mock_create:
+                with patch("src.tasks.queue.enqueue_background_task", new_callable=AsyncMock):
+                    with patch("src.tasks.queue.cancel_fallback_reminder", new_callable=AsyncMock):
+                        result = await handoff_task_tool.handler({
+                            "task_type": "deploy",
+                            "plan": {"objective": "Deploy to staging", "steps": ["Deploy"]},
+                            "notify_on": "both",
+                        })
+
+        # Should succeed, not error
+        assert result.get("is_error") is None or result.get("is_error") is False
+        assert "Task handed off" in result["content"][0]["text"]
+
+        # Should have passed "owner" as user_id
+        mock_create.assert_called_once()
+        call_kwargs = mock_create.call_args
+        assert call_kwargs[1]["user_id"] == "owner" or call_kwargs[0][0] == "owner"
+
+    @pytest.mark.asyncio
+    async def test_handoff_multi_tenant_rejects_no_user(self):
+        """No user_id + MULTI_TENANT=True → returns error."""
+        from src.agent.sdk_client import handoff_task_tool, _set_session_context
+
+        _set_session_context(user_context={}, caller_phone="+1234567890")
+
+        with patch("src.agent.sdk_client.settings") as mock_settings:
+            mock_settings.MULTI_TENANT = True
+            result = await handoff_task_tool.handler({
+                "task_type": "deploy",
+                "plan": {"objective": "Deploy", "steps": ["Deploy"]},
+                "notify_on": "both",
+            })
+
+        assert result["is_error"] is True
+        assert "authenticated user" in result["content"][0]["text"].lower() or "user context" in result["content"][0]["text"].lower()
+
+    @pytest.mark.asyncio
+    async def test_handoff_db_error_returns_error(self):
+        """create_background_task throws → error message returned."""
+        from src.agent.sdk_client import handoff_task_tool, _set_session_context
+
+        _set_session_context(
+            user_context={"user_id": "user-123"},
+            caller_phone="+1234567890",
+        )
+
+        with patch("src.agent.sdk_client.settings") as mock_settings:
+            mock_settings.MULTI_TENANT = False
+            with patch(
+                "src.db.background_tasks.create_background_task",
+                new_callable=AsyncMock,
+                side_effect=Exception("DNS resolution failed for db host"),
+            ):
+                result = await handoff_task_tool.handler({
+                    "task_type": "deploy",
+                    "plan": {"objective": "Deploy", "steps": ["Deploy"]},
+                    "notify_on": "both",
+                })
+
+        assert result["is_error"] is True
+        assert "Failed to hand off task" in result["content"][0]["text"]
+
+    @pytest.mark.asyncio
+    async def test_handoff_redis_unavailable_sends_sms(self):
+        """RedisUnavailableError from enqueue → SMS fallback sent."""
+        from src.agent.sdk_client import handoff_task_tool, _set_session_context
+        from src.tasks.queue import RedisUnavailableError
+
+        _set_session_context(
+            user_context={"user_id": "user-123"},
+            caller_phone="+1234567890",
+        )
+
+        with patch("src.agent.sdk_client.settings") as mock_settings:
+            mock_settings.MULTI_TENANT = False
+            with patch("src.db.background_tasks.create_background_task", new_callable=AsyncMock, return_value="task-123"):
+                with patch(
+                    "src.tasks.queue.enqueue_background_task",
+                    new_callable=AsyncMock,
+                    side_effect=RedisUnavailableError("Redis not configured"),
+                ):
+                    with patch("src.callbacks.outbound.send_sms", new_callable=AsyncMock) as mock_sms:
+                        result = await handoff_task_tool.handler({
+                            "task_type": "deploy",
+                            "plan": {"objective": "Deploy", "steps": ["Deploy"]},
+                            "notify_on": "both",
+                        })
+
+        assert result["is_error"] is True
+        assert "background service" in result["content"][0]["text"].lower()
+        mock_sms.assert_called_once()
+        assert "+1234567890" in mock_sms.call_args[0]

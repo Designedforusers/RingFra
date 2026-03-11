@@ -34,7 +34,7 @@ def mock_settings():
         mock.TARGET_REPO_PATH = "/tmp/test-repo"
         mock.HOST = "0.0.0.0"
         mock.PORT = 8765
-        mock.VOICE_MODEL = "claude-sonnet-4-5-20250929"
+        mock.VOICE_MODEL = "claude-sonnet-4-6"
         mock.STT_MODEL = "nova-2"
         mock.TTS_VOICE = "test-voice"
         yield mock

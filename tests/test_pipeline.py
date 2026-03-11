@@ -57,6 +57,69 @@ class TestPrompts:
             assert required in tool_names, f"Missing required tool: {required}"
 
 
+class TestGoodbyeDetection:
+    """Tests for goodbye phrase detection."""
+
+    def test_goodbye_phrases_detected(self):
+        """Various goodbye phrases are detected correctly."""
+        from src.voice.sdk_pipeline import SDKBridgeProcessor
+
+        processor = SDKBridgeProcessor(session=None)
+
+        goodbye_phrases = [
+            "bye",
+            "goodbye",
+            "see you later",
+            "thanks bye",
+            "talk to you later",
+            "hang up",
+            "end the call",
+        ]
+
+        for phrase in goodbye_phrases:
+            assert processor._is_goodbye(phrase), f"Should detect goodbye: '{phrase}'"
+
+    def test_non_goodbye_phrases_not_detected(self):
+        """Normal phrases are not flagged as goodbye."""
+        from src.voice.sdk_pipeline import SDKBridgeProcessor
+
+        processor = SDKBridgeProcessor(session=None)
+
+        non_goodbye = [
+            "check the logs",
+            "deploy to staging",
+            "buy me some time",  # contains 'by' but not 'bye'
+            "how are you",
+        ]
+
+        for phrase in non_goodbye:
+            assert not processor._is_goodbye(phrase), f"Should NOT detect goodbye: '{phrase}'"
+
+
+class TestCallbackRequestedButNotScheduled:
+    """Test safety net when callback is requested but not scheduled."""
+
+    def test_flags_track_correctly(self):
+        """callback_requested and callback_scheduled flags work together."""
+        from src.voice.sdk_pipeline import SDKBridgeProcessor
+
+        processor = SDKBridgeProcessor(session=None, caller_phone="+1234567890")
+
+        # Initially both false
+        assert not processor._callback_requested
+        assert not processor._callback_scheduled
+
+        # User requests a callback
+        processor._callback_requested = True
+        assert processor._callback_requested
+        assert not processor._callback_scheduled
+
+        # After handoff_task, callback_scheduled should be set
+        processor._callback_scheduled = True
+        assert processor._callback_requested
+        assert processor._callback_scheduled
+
+
 class TestHandlers:
     """Tests for Twilio handlers."""
 
